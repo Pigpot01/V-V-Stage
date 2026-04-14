@@ -927,18 +927,6 @@ export class Stage extends StageBase<
     return buildTransferText(buildRosterExportPayload(this.chatStateData));
   }
 
-  async hideStageInChat(): Promise<void> {
-    try {
-      await this.messenger.updateEnvironment({
-        stage_hidden: true,
-      });
-    } catch (error) {
-      this.setUiErrorMessage(
-        error instanceof Error ? error.message : "Failed to hide the stage in chat.",
-      );
-    }
-  }
-
   async importCharacterText(rawText: string): Promise<void> {
     if (this.chatStateData.controlMode !== "setup") {
       this.setUiErrorMessage("Return to setup mode before importing character text.");

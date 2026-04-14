@@ -196,8 +196,8 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
               <p className="eyebrow">Vice & Violence Stage</p>
               <h2>Sheets and combat state</h2>
               <p className="small-copy">
-                Collapse the stage with the edge handle. Hide From Chat uses Chub&apos;s own stage
-                hide control and you may need to reopen it from the host UI.
+                Collapse the stage with the fixed edge handle on the right. The panel can stay
+                open for sheet work or tuck away while you focus on chat.
               </p>
             </div>
             <div className="toolbar-actions">
@@ -215,9 +215,6 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
                   <strong>{scalePercentLabel(uiScale)}</strong>
                 </div>
               </div>
-              <button type="button" onClick={() => void stage.hideStageInChat()}>
-                Hide From Chat
-              </button>
             </div>
           </section>
 

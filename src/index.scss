@@ -1,14 +1,14 @@
 :root {
-  --paper: #ffffff;
-  --paper-strong: #ffffff;
-  --panel: #ffffff;
-  --panel-soft: #f4f9fc;
-  --panel-line: #b8d9ee;
-  --ink: #18364b;
-  --ink-soft: #5d778b;
-  --accent: #1593d6;
-  --accent-soft: #e9f5fd;
-  --danger: #cf4357;
+  --paper: #1c2220;
+  --paper-strong: #eef4ef;
+  --panel: #232927;
+  --panel-soft: #2c3431;
+  --panel-line: #4e5d57;
+  --ink: #e4ece6;
+  --ink-soft: #a7b3ad;
+  --accent: #76897d;
+  --accent-soft: #38433e;
+  --danger: #bf6674;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -30,7 +30,7 @@ body,
 body {
   font-family: Georgia, "Times New Roman", serif;
   color: var(--ink);
-  background: transparent;
+  background: #121715;
 }
 
 button,
@@ -45,7 +45,7 @@ button {
   border-radius: 999px;
   padding: 0.55rem 0.95rem;
   color: var(--accent);
-  background: var(--paper);
+  background: var(--panel);
   cursor: pointer;
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
@@ -62,12 +62,12 @@ button:disabled {
 
 button:disabled:hover {
   border-color: var(--accent);
-  background: var(--paper);
+  background: var(--panel);
 }
 
 button.danger {
   border-color: var(--danger);
-  color: var(--paper);
+  color: var(--paper-strong);
   background: var(--danger);
 }
 
@@ -81,7 +81,7 @@ textarea,
   border-radius: 14px;
   padding: 0.7rem 0.8rem;
   color: var(--ink);
-  background: var(--paper);
+  background: #181d1c;
 }
 
 input:disabled,
@@ -98,7 +98,7 @@ textarea {
 .vnv-shell {
   min-height: 100%;
   overflow: auto;
-  padding: 12px;
+  padding: 12px 84px 12px 12px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -139,6 +139,7 @@ textarea {
   justify-content: flex-end;
   width: max-content;
   max-width: 100%;
+  position: relative;
 }
 
 .vnv-dock-panel {
@@ -160,8 +161,13 @@ textarea {
 .vnv-dock-edge {
   display: flex;
   align-items: center;
+  flex-direction: column;
   gap: 12px;
-  padding: 18px 0;
+  position: fixed;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  z-index: 40;
   flex-shrink: 0;
 }
 
@@ -179,6 +185,8 @@ textarea {
   color: var(--ink-soft);
   font-size: 0.92rem;
   white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 
 .scale-card {
@@ -312,8 +320,8 @@ textarea {
 }
 
 .banner-error {
-  border-color: #efbcc5;
-  background: #fff4f6;
+  border-color: #7a4952;
+  background: #342328;
 }
 
 .vnv-tabs {
@@ -323,7 +331,7 @@ textarea {
 }
 
 .vnv-tabs button.is-active {
-  color: var(--paper);
+  color: var(--paper-strong);
   background: var(--accent);
 }
 
@@ -427,7 +435,7 @@ textarea {
 }
 
 .actor-card.is-locked {
-  background: #f7fafc;
+  background: #262d2b;
 }
 
 .actor-editor-fields {
@@ -453,7 +461,7 @@ textarea {
 .status-chip.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--paper);
+  color: var(--paper-strong);
 }
 
 .formula-box strong,
@@ -474,7 +482,7 @@ textarea {
 .roll-entry {
   padding: 12px;
   border-radius: 16px;
-  background: var(--paper);
+  background: #181d1c;
   border: 1px solid var(--panel-line);
 }
 
