@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ABILITY_RULES,
   ARMOUR_TABLE,
@@ -158,7 +158,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
   const [transferDraft, setTransferDraft] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [copyLabel, setCopyLabel] = useState("Copy code");
-  const scaleStyle = { "--ui-scale": uiScale } as CSSProperties;
+  const scaleStyle = { "--ui-scale": uiScale } as any;
 
   useEffect(() => stage.subscribe(() => setRevision((value) => value + 1)), [stage]);
   useEffect(() => setCampaignNotesDraft(chatState.campaignNotes), [chatState.campaignNotes]);
@@ -193,11 +193,11 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
 
           <section className="panel vnv-toolbar">
             <div>
-              <p className="eyebrow">Vice & Violence Stage</p>
-              <h2>Sheets and combat state</h2>
+              <p className="eyebrow">Vice & Violence Utility</p>
+              <h2>Builder and transfer companion</h2>
               <p className="small-copy">
-                Collapse the stage with the fixed edge handle on the right. The panel can stay
-                open for sheet work or tuck away while you focus on chat.
+                Use this visible utility stage to build sheets and export transfer codes. The hidden
+                background stage handles prompt injection in the actual RP chat.
               </p>
             </div>
             <div className="toolbar-actions">
@@ -221,10 +221,11 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
           <div className="vnv-scale-shell" style={scaleStyle}>
             <header className="vnv-hero">
               <div>
-                <p className="eyebrow">Stage</p>
-                <h1>Sheets, combat state, and prompt rules</h1>
+                <p className="eyebrow">Utility Stage</p>
+                <h1>Sheets, combat state, and transfer tools</h1>
                 <p className="hero-copy">
-                  Party setup, initiative tracking, prompt guidance, and reusable transfer codes.
+                  Party setup, initiative planning, and reusable transfer codes for the hidden
+                  mechanics stage.
                 </p>
               </div>
               <div className="hero-stats">
@@ -1285,7 +1286,7 @@ function PromptPreview({ preview }: PromptPreviewProps) {
       <div className="panel-header">
         <div>
           <p className="eyebrow">Prompt Preview</p>
-          <h2>Injected stage directions</h2>
+          <h2>Background stage directions preview</h2>
         </div>
       </div>
       <pre className="prompt-preview">{preview}</pre>

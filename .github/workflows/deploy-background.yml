@@ -1,0 +1,90 @@
+name: Deploy Background Stage
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "21.7.1"
+
+      - name: Confirm CHUB_AUTH_TOKEN is set
+        env:
+          CHUB_AUTH_TOKEN: ${{ secrets.CHUB_AUTH_TOKEN }}
+        run: |
+          if [ "${{ secrets.CHUB_AUTH_TOKEN }}" == "" ] || [ "${{ secrets.CHUB_AUTH_TOKEN }}" == "null" ]; then
+             echo "Your CHUB_AUTH_TOKEN secret is not set for this project. Cannot proceed."
+             exit 1
+          fi
+
+      - name: Get or Make Background Stage ID
+        env:
+          CHUB_AUTH_TOKEN: ${{ secrets.CHUB_AUTH_TOKEN }}
+        run: |
+          mkdir -p background-stage/public
+          touch background-stage/public/chub_meta.yaml
+
+          if grep -q "^github_path:" background-stage/public/chub_meta.yaml; then
+            echo "Repo path already in background metadata file."
+          else
+            echo "Writing github path 'https://github.com/${{ github.repository }}' to background metadata file."
+            echo -e "\ngithub_path: 'https://github.com/${{ github.repository }}'\n" >> background-stage/public/chub_meta.yaml
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git add background-stage/public/chub_meta.yaml
+            git commit -m "Add github_path to background chub_meta.yaml" || true
+            git push
+          fi
+
+          STAGE_ID=$(grep '^extension_id:' background-stage/public/chub_meta.yaml | cut -d ':' -f2 | tr -d " '\"")
+          if [ "${STAGE_ID}" == "" ] || [ "${STAGE_ID}" == "null" ]; then
+            echo "Background extension ID not present. Creating new project."
+            sudo apt-get update
+            sudo apt-get install -y jq
+            curl --fail-with-body --show-error -H "CH-API-KEY: ${{ secrets.CHUB_AUTH_TOKEN }}" -H "Content-Type: application/json" --request POST --data '{"name":"${{ github.event.repository.name }} Background"}' https://api.chub.ai/extensions -o creation.json
+            STAGE_ID=$(jq -r '.id_v2' creation.json)
+            if [ "${STAGE_ID}" == "" ] || [ "${STAGE_ID}" == "null" ]; then
+              echo "Background extension ID creation failed."
+              exit 1
+            fi
+            echo -e "\nextension_id: '${STAGE_ID}'\n" >> background-stage/public/chub_meta.yaml
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git add background-stage/public/chub_meta.yaml
+            git commit -m "Add background Extension ID to chub_meta.yaml" || true
+            git push
+          else
+            echo "Background extension ID found in background-stage/public/chub_meta.yaml."
+          fi
+
+          echo "STAGE_ID=${STAGE_ID}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        working-directory: background-stage
+        run: yarn install
+
+      - name: Build
+        working-directory: background-stage
+        run: yarn build
+
+      - name: Zip the build folder
+        run: cd background-stage/dist && zip -r ../../background-build.zip * && cd ../../
+
+      - name: Upload the build
+        env:
+          CHUB_AUTH_TOKEN: ${{ secrets.CHUB_AUTH_TOKEN }}
+        run: |
+          curl --fail-with-body --show-error -H "CH-API-KEY: ${{ secrets.CHUB_AUTH_TOKEN }}" -F "file=@background-build.zip" https://api.chub.ai/extension/${{ env.STAGE_ID }}/upload

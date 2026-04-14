@@ -927,16 +927,16 @@ export class Stage extends StageBase<
     return buildTransferText(buildRosterExportPayload(this.chatStateData));
   }
 
-  async importCharacterText(rawText: string): Promise<void> {
+  async importCharacterText(rawText: string): Promise<string | null> {
     if (this.chatStateData.controlMode !== "setup") {
       this.setUiErrorMessage("Return to setup mode before importing character text.");
-      return;
+      return "Return to setup mode before importing character text.";
     }
 
     const text = stripJsonFence(rawText);
     if (normaliseText(text) === "") {
       this.setUiErrorMessage("Paste a character or roster code first.");
-      return;
+      return "Paste a character or roster code first.";
     }
 
     try {
@@ -971,10 +971,12 @@ export class Stage extends StageBase<
               : state.campaignNotes,
         });
       });
+      return null;
     } catch (error) {
-      this.setUiErrorMessage(
-        error instanceof Error ? error.message : "Failed to import character text.",
-      );
+      const message =
+        error instanceof Error ? error.message : "Failed to import character text.";
+      this.setUiErrorMessage(message);
+      return message;
     }
   }
 

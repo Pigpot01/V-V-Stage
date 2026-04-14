@@ -1,14 +1,14 @@
-project_name: "Vice & Violence Utility"
-tagline: "Visible builder and transfer stage for V&V sheets."
+project_name: "Vice & Violence Background"
+tagline: "Hidden mechanics stage for V&V transfer codes and prompt rules."
 visibility: "UNLISTED"
-position: "ADJACENT"
+position: "NONE"
 tags:
   - "Stage"
   - "RPG"
   - "Vice & Violence"
   - "Mechanics"
+  - "Background"
 github_path: "https://github.com/Pigpot01/V-V-Stage"
-extension_id: "vice-violence-mechanics-c4a8a359a947"
 
 config_schema:
   type: object
@@ -22,7 +22,7 @@ config_schema:
       default: "LL2"
     includeStageDirections:
       type: boolean
-      default: false
+      default: true
     compactPromptSummary:
       type: boolean
       default: true
