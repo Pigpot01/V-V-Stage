@@ -41,6 +41,26 @@ interface LocalStageCache {
   savedAt: number;
   chatState: StageChatState;
   uiScale: number;
+  uiCollapsed: boolean;
+}
+
+interface FilePickerWritable {
+  write(data: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface FilePickerHandle {
+  createWritable(): Promise<FilePickerWritable>;
+}
+
+interface FilePickerWindow extends Window {
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: Array<{
+      description: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<FilePickerHandle>;
 }
 
 interface AutomationActorPatch {
@@ -90,8 +110,9 @@ const DEFAULT_CONFIG: ResolvedStageConfig = {
   lewdLevel: "LL2",
 };
 
-const LOCAL_CACHE_VERSION = 1;
+const LOCAL_CACHE_VERSION = 2;
 const DEFAULT_UI_SCALE = 1;
+const DEFAULT_UI_COLLAPSED = false;
 const MIN_UI_SCALE = 0.75;
 const MAX_UI_SCALE = 1.3;
 const MAX_ROLL_LOG = 24;
@@ -140,6 +161,10 @@ function normaliseControlMode(value: ControlMode | undefined): ControlMode {
 function normaliseUiScale(value: number | undefined): number {
   const fallback = value ?? DEFAULT_UI_SCALE;
   return clamp(Math.round(fallback * 100) / 100, MIN_UI_SCALE, MAX_UI_SCALE);
+}
+
+function normaliseUiCollapsed(value: boolean | undefined): boolean {
+  return value === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -467,22 +492,61 @@ function buildRosterExportPayload(state: StageChatState): Record<string, unknown
   };
 }
 
-function downloadJson(filename: string, payload: unknown): void {
-  if (typeof document === "undefined" || typeof URL === "undefined") {
-    return;
+async function saveJsonFile(filename: string, payload: unknown): Promise<boolean> {
+  if (typeof window === "undefined") {
+    return false;
   }
 
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  const content = JSON.stringify(payload, null, 2);
+  const pickerWindow = window as FilePickerWindow;
+
+  if (typeof pickerWindow.showSaveFilePicker === "function") {
+    try {
+      const handle = await pickerWindow.showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: "JSON Files",
+            accept: {
+              "application/json": [".json"],
+            },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      return true;
+    } catch (error) {
+      if (readString((error as { name?: string })?.name) === "AbortError") {
+        return true;
+      }
+    }
+  }
+
+  if (typeof document === "undefined" || typeof URL === "undefined") {
+    return false;
+  }
+
+  try {
+    const blob = new Blob([content], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.rel = "noopener noreferrer";
+    link.target = "_blank";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (error) {
+    void error;
+    return false;
+  }
 }
 
 function resolvePersistenceKey(): string {
@@ -512,6 +576,7 @@ function readLocalCache(persistenceKey: string): LocalStageCache | null {
       savedAt: readNumber(parsed.savedAt) ?? Date.now(),
       chatState: normaliseState(parsed.chatState as unknown as StageChatState),
       uiScale: normaliseUiScale(readNumber(parsed.uiScale)),
+      uiCollapsed: normaliseUiCollapsed(readBoolean(parsed.uiCollapsed)),
     };
   } catch (error) {
     void error;
@@ -789,6 +854,7 @@ export class Stage extends StageBase<
   private readonly persistenceKey: string;
   private uiError: string | null;
   private uiScaleData: number;
+  private uiCollapsedData: boolean;
 
   constructor(
     data: InitialData<null, StageChatState, StageMessageState, StageConfig>,
@@ -805,6 +871,7 @@ export class Stage extends StageBase<
     this.listeners = new Set();
     this.uiError = null;
     this.uiScaleData = normaliseUiScale(localCache?.uiScale);
+    this.uiCollapsedData = normaliseUiCollapsed(localCache?.uiCollapsed);
   }
 
   async load(): Promise<
@@ -887,6 +954,10 @@ export class Stage extends StageBase<
     return this.uiScaleData;
   }
 
+  getUiCollapsed(): boolean {
+    return this.uiCollapsedData;
+  }
+
   clearUiError(): void {
     this.uiError = null;
     this.emit();
@@ -894,6 +965,12 @@ export class Stage extends StageBase<
 
   setUiScale(uiScale: number): void {
     this.uiScaleData = normaliseUiScale(uiScale);
+    this.persistLocalCache(this.chatStateData);
+    this.emit();
+  }
+
+  setUiCollapsed(uiCollapsed: boolean): void {
+    this.uiCollapsedData = normaliseUiCollapsed(uiCollapsed);
     this.persistLocalCache(this.chatStateData);
     this.emit();
   }
@@ -912,23 +989,44 @@ export class Stage extends StageBase<
     }));
   }
 
-  exportActorSheet(actor: ActorSheet): void {
-    downloadJson(
+  async exportActorSheet(actor: ActorSheet): Promise<void> {
+    const success = await saveJsonFile(
       `${safeFilenameSegment(actor.name || actor.id)}.vnv-character.json`,
       buildActorExportPayload(normaliseActor(actor)),
     );
+    if (!success) {
+      this.setUiErrorMessage("This browser blocked file saving for the stage.");
+    }
   }
 
-  exportActor(actorId: string): void {
+  async exportActor(actorId: string): Promise<void> {
     const actor = this.chatStateData.actors.find((entry) => entry.id === actorId);
     if (actor == null) {
       return;
     }
-    this.exportActorSheet(actor);
+    await this.exportActorSheet(actor);
   }
 
-  exportRoster(): void {
-    downloadJson("vnv-roster.json", buildRosterExportPayload(this.chatStateData));
+  async exportRoster(): Promise<void> {
+    const success = await saveJsonFile(
+      "vnv-roster.json",
+      buildRosterExportPayload(this.chatStateData),
+    );
+    if (!success) {
+      this.setUiErrorMessage("This browser blocked file saving for the stage.");
+    }
+  }
+
+  async hideStageInChat(): Promise<void> {
+    try {
+      await this.messenger.updateEnvironment({
+        stage_hidden: true,
+      });
+    } catch (error) {
+      this.setUiErrorMessage(
+        error instanceof Error ? error.message : "Failed to hide the stage in chat.",
+      );
+    }
   }
 
   async importCharacterFiles(files: FileList | File[]): Promise<void> {
@@ -1423,6 +1521,7 @@ export class Stage extends StageBase<
         savedAt: Date.now(),
         chatState,
         uiScale: this.uiScaleData,
+        uiCollapsed: this.uiCollapsedData,
       };
       window.localStorage.setItem(this.persistenceKey, JSON.stringify(cache));
     } catch (error) {

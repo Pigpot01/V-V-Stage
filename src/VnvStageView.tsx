@@ -120,6 +120,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
   const config = stage.getConfig();
   const uiError = stage.getUiError();
   const uiScale = stage.getUiScale();
+  const uiCollapsed = stage.getUiCollapsed();
   const [campaignNotesDraft, setCampaignNotesDraft] = useState(chatState.campaignNotes);
   const [encounterNotesDraft, setEncounterNotesDraft] = useState(chatState.encounter.notes);
   const scaleStyle = { "--ui-scale": uiScale } as CSSProperties;
@@ -130,37 +131,16 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
 
   return (
     <div className="vnv-shell">
-      <div className="vnv-scale-shell" style={scaleStyle}>
-      <header className="vnv-hero">
+      <section className="panel vnv-toolbar">
         <div>
-          <p className="eyebrow">Vice & Violence Stage</p>
-          <h1>Sheets, combat state, and prompt rules in one place</h1>
-          <p className="hero-copy">
-            OCR-backed helper for character setup, encounter tracking, and V&V-flavored
-            prompt injection.
+          <p className="eyebrow">Stage Controls</p>
+          <h2>Visibility and scale</h2>
+          <p className="small-copy">
+            Collapse the stage to give the main chat more room. Hide From Chat removes the stage
+            from the thread until you reopen it with Chub&apos;s stage controls.
           </p>
         </div>
-        <div className="hero-stats">
-          <div className="stat-chip">
-            <span>Lewd level</span>
-            <strong>{config.lewdLevel}</strong>
-          </div>
-          <div className="stat-chip">
-            <span>Stage directions</span>
-            <strong>{config.includeStageDirections ? "On" : "Off"}</strong>
-          </div>
-          <div className="stat-chip">
-            <span>Tracked actors</span>
-            <strong>{chatState.actors.length}</strong>
-          </div>
-          <div className="stat-chip">
-            <span>Control mode</span>
-            <strong>{controlModeLabel(chatState.controlMode)}</strong>
-          </div>
-          <div className="stat-chip">
-            <span>Encounter</span>
-            <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
-          </div>
+        <div className="toolbar-actions">
           <div className="scale-card">
             <span>UI scale</span>
             <div className="scale-row">
@@ -175,8 +155,14 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
               <strong>{scalePercentLabel(uiScale)}</strong>
             </div>
           </div>
+          <button type="button" onClick={() => stage.setUiCollapsed(!uiCollapsed)}>
+            {uiCollapsed ? "Expand Stage" : "Collapse Stage"}
+          </button>
+          <button type="button" onClick={() => void stage.hideStageInChat()}>
+            Hide From Chat
+          </button>
         </div>
-      </header>
+      </section>
 
       {uiError != null ? (
         <div className="banner banner-error">
@@ -187,48 +173,108 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
         </div>
       ) : null}
 
-      <nav className="vnv-tabs">
-        {(["builder", "encounter", "reference"] as TabKey[]).map((value) => (
-          <button
-            key={value}
-            type="button"
-            className={value === tab ? "is-active" : ""}
-            onClick={() => setTab(value)}
-          >
-            {tabLabel(value)}
-          </button>
-        ))}
-      </nav>
-
-      <div className="vnv-layout">
-        <section className="vnv-main">
-          {tab === "builder" ? (
-            <BuilderPanel
-              stage={stage}
-              actors={chatState.actors}
-              controlMode={chatState.controlMode}
-              campaignNotesDraft={campaignNotesDraft}
-              setCampaignNotesDraft={setCampaignNotesDraft}
-            />
-          ) : null}
-          {tab === "encounter" ? (
-            <EncounterPanel
-              stage={stage}
-              controlMode={chatState.controlMode}
-              encounterNotesDraft={encounterNotesDraft}
-              setEncounterNotesDraft={setEncounterNotesDraft}
-            />
-          ) : null}
-          {tab === "reference" ? <ReferencePanel /> : null}
+      {uiCollapsed ? (
+        <section className="panel vnv-collapsed">
+          <div>
+            <p className="eyebrow">Stage Collapsed</p>
+            <h2>Chat-first view</h2>
+            <p className="small-copy">
+              Expand the stage when you want to edit sheets or track combat again.
+            </p>
+          </div>
+          <div className="hero-stats">
+            <div className="stat-chip">
+              <span>Tracked actors</span>
+              <strong>{chatState.actors.length}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Control mode</span>
+              <strong>{controlModeLabel(chatState.controlMode)}</strong>
+            </div>
+            <div className="stat-chip">
+              <span>Encounter</span>
+              <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
+            </div>
+          </div>
         </section>
+      ) : (
+        <div className="vnv-scale-shell" style={scaleStyle}>
+          <header className="vnv-hero">
+            <div>
+              <p className="eyebrow">Vice & Violence Stage</p>
+              <h1>Sheets, combat state, and prompt rules in one place</h1>
+              <p className="hero-copy">
+                OCR-backed helper for character setup, encounter tracking, and V&V-flavored
+                prompt injection.
+              </p>
+            </div>
+            <div className="hero-stats">
+              <div className="stat-chip">
+                <span>Lewd level</span>
+                <strong>{config.lewdLevel}</strong>
+              </div>
+              <div className="stat-chip">
+                <span>Stage directions</span>
+                <strong>{config.includeStageDirections ? "On" : "Off"}</strong>
+              </div>
+              <div className="stat-chip">
+                <span>Tracked actors</span>
+                <strong>{chatState.actors.length}</strong>
+              </div>
+              <div className="stat-chip">
+                <span>Control mode</span>
+                <strong>{controlModeLabel(chatState.controlMode)}</strong>
+              </div>
+              <div className="stat-chip">
+                <span>Encounter</span>
+                <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
+              </div>
+            </div>
+          </header>
 
-        <aside className="vnv-side">
-          <DiceTray stage={stage} />
-          <RollLog entries={chatState.rollLog} />
-          <PromptPreview preview={stage.previewStageDirections()} />
-        </aside>
-      </div>
-      </div>
+          <nav className="vnv-tabs">
+            {(["builder", "encounter", "reference"] as TabKey[]).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={value === tab ? "is-active" : ""}
+                onClick={() => setTab(value)}
+              >
+                {tabLabel(value)}
+              </button>
+            ))}
+          </nav>
+
+          <div className="vnv-layout">
+            <section className="vnv-main">
+              {tab === "builder" ? (
+                <BuilderPanel
+                  stage={stage}
+                  actors={chatState.actors}
+                  controlMode={chatState.controlMode}
+                  campaignNotesDraft={campaignNotesDraft}
+                  setCampaignNotesDraft={setCampaignNotesDraft}
+                />
+              ) : null}
+              {tab === "encounter" ? (
+                <EncounterPanel
+                  stage={stage}
+                  controlMode={chatState.controlMode}
+                  encounterNotesDraft={encounterNotesDraft}
+                  setEncounterNotesDraft={setEncounterNotesDraft}
+                />
+              ) : null}
+              {tab === "reference" ? <ReferencePanel /> : null}
+            </section>
+
+            <aside className="vnv-side">
+              <DiceTray stage={stage} />
+              <RollLog entries={chatState.rollLog} />
+              <PromptPreview preview={stage.previewStageDirections()} />
+            </aside>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -282,7 +328,7 @@ function BuilderPanel({
             >
               Import Character File
             </button>
-            <button type="button" onClick={() => stage.exportRoster()}>
+            <button type="button" onClick={() => void stage.exportRoster()}>
               Save Roster File
             </button>
             <button
@@ -391,7 +437,7 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           {!editable ? <p className="small-copy">System-managed during play.</p> : null}
         </div>
         <div className="button-row">
-          <button type="button" onClick={() => stage.exportActorSheet(draft)}>
+          <button type="button" onClick={() => void stage.exportActorSheet(draft)}>
             Save file
           </button>
           {editable ? (

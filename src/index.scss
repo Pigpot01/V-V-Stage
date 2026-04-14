@@ -101,18 +101,26 @@ textarea {
   min-height: 100%;
   overflow: auto;
   padding: 20px;
+  display: flex;
   flex-direction: column;
+  gap: 16px;
 }
 
 .vnv-scale-shell {
   --ui-scale: 1;
-  min-height: calc(100% / var(--ui-scale));
-  width: calc(100% / var(--ui-scale));
   display: flex;
   flex-direction: column;
   gap: 16px;
-  transform: scale(var(--ui-scale));
-  transform-origin: top left;
+  zoom: var(--ui-scale);
+}
+
+@supports not (zoom: 1) {
+  .vnv-scale-shell {
+    min-height: calc(100% / var(--ui-scale));
+    width: calc(100% / var(--ui-scale));
+    transform: scale(var(--ui-scale));
+    transform-origin: top left;
+  }
 }
 
 .sr-only {
@@ -174,6 +182,22 @@ textarea {
 .vnv-shell,
 .vnv-scale-shell {
   display: flex;
+}
+
+.vnv-toolbar,
+.vnv-collapsed {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .vnv-hero,
@@ -447,5 +471,15 @@ textarea {
   .formula-grid,
   .dice-form {
     grid-template-columns: 1fr;
+  }
+
+  .vnv-toolbar,
+  .vnv-collapsed {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .toolbar-actions {
+    justify-content: stretch;
   }
 }
