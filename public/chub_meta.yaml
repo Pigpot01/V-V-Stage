@@ -7,6 +7,8 @@ tags:
   - "RPG"
   - "Vice & Violence"
   - "Mechanics"
+github_path: "https://github.com/Pigpot01/V-V-Stage"
+extension_id: "vice-violence-mechanics-c4a8a359a947"
 
 config_schema:
   type: object
