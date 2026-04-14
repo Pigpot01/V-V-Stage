@@ -44,25 +44,6 @@ interface LocalStageCache {
   uiCollapsed: boolean;
 }
 
-interface FilePickerWritable {
-  write(data: string): Promise<void>;
-  close(): Promise<void>;
-}
-
-interface FilePickerHandle {
-  createWritable(): Promise<FilePickerWritable>;
-}
-
-interface FilePickerWindow extends Window {
-  showSaveFilePicker?: (options?: {
-    suggestedName?: string;
-    types?: Array<{
-      description: string;
-      accept: Record<string, string[]>;
-    }>;
-  }) => Promise<FilePickerHandle>;
-}
-
 interface AutomationActorPatch {
   id?: string;
   role?: ActorRole;
@@ -112,7 +93,6 @@ const DEFAULT_CONFIG: ResolvedStageConfig = {
 
 const LOCAL_CACHE_VERSION = 2;
 const DEFAULT_UI_SCALE = 1;
-const DEFAULT_UI_COLLAPSED = false;
 const MIN_UI_SCALE = 0.75;
 const MAX_UI_SCALE = 1.3;
 const MAX_ROLL_LOG = 24;
@@ -453,11 +433,6 @@ function defaultNameForRole(role: ActorRole): string {
   }
 }
 
-function safeFilenameSegment(value: string): string {
-  const normalised = normaliseId(value).toLowerCase().replace(/[^a-z0-9-]/g, "-");
-  return normalised.replace(/-+/g, "-").replace(/^-|-$/g, "") || "character";
-}
-
 function createActorResetSheet(actor: ActorSheet): ActorSheet {
   const base = createActor(actor.role);
   return normaliseActor({
@@ -492,61 +467,8 @@ function buildRosterExportPayload(state: StageChatState): Record<string, unknown
   };
 }
 
-async function saveJsonFile(filename: string, payload: unknown): Promise<boolean> {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const content = JSON.stringify(payload, null, 2);
-  const pickerWindow = window as FilePickerWindow;
-
-  if (typeof pickerWindow.showSaveFilePicker === "function") {
-    try {
-      const handle = await pickerWindow.showSaveFilePicker({
-        suggestedName: filename,
-        types: [
-          {
-            description: "JSON Files",
-            accept: {
-              "application/json": [".json"],
-            },
-          },
-        ],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(content);
-      await writable.close();
-      return true;
-    } catch (error) {
-      if (readString((error as { name?: string })?.name) === "AbortError") {
-        return true;
-      }
-    }
-  }
-
-  if (typeof document === "undefined" || typeof URL === "undefined") {
-    return false;
-  }
-
-  try {
-    const blob = new Blob([content], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.rel = "noopener noreferrer";
-    link.target = "_blank";
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return true;
-  } catch (error) {
-    void error;
-    return false;
-  }
+function buildTransferText(payload: unknown): string {
+  return JSON.stringify(payload, null, 2);
 }
 
 function resolvePersistenceKey(): string {
@@ -989,32 +911,20 @@ export class Stage extends StageBase<
     }));
   }
 
-  async exportActorSheet(actor: ActorSheet): Promise<void> {
-    const success = await saveJsonFile(
-      `${safeFilenameSegment(actor.name || actor.id)}.vnv-character.json`,
-      buildActorExportPayload(normaliseActor(actor)),
-    );
-    if (!success) {
-      this.setUiErrorMessage("This browser blocked file saving for the stage.");
-    }
+  createActorTransferCode(actor: ActorSheet): string {
+    return buildTransferText(buildActorExportPayload(normaliseActor(actor)));
   }
 
-  async exportActor(actorId: string): Promise<void> {
+  createActorTransferCodeFromId(actorId: string): string | null {
     const actor = this.chatStateData.actors.find((entry) => entry.id === actorId);
     if (actor == null) {
-      return;
+      return null;
     }
-    await this.exportActorSheet(actor);
+    return this.createActorTransferCode(actor);
   }
 
-  async exportRoster(): Promise<void> {
-    const success = await saveJsonFile(
-      "vnv-roster.json",
-      buildRosterExportPayload(this.chatStateData),
-    );
-    if (!success) {
-      this.setUiErrorMessage("This browser blocked file saving for the stage.");
-    }
+  createRosterTransferCode(): string {
+    return buildTransferText(buildRosterExportPayload(this.chatStateData));
   }
 
   async hideStageInChat(): Promise<void> {
@@ -1025,6 +935,57 @@ export class Stage extends StageBase<
     } catch (error) {
       this.setUiErrorMessage(
         error instanceof Error ? error.message : "Failed to hide the stage in chat.",
+      );
+    }
+  }
+
+  async importCharacterText(rawText: string): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      this.setUiErrorMessage("Return to setup mode before importing character text.");
+      return;
+    }
+
+    const text = stripJsonFence(rawText);
+    if (normaliseText(text) === "") {
+      this.setUiErrorMessage("Paste a character or roster code first.");
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      const importedActors = coerceImportedActors(parsed);
+      if (importedActors.length === 0) {
+        throw new Error("No actors found in the pasted text.");
+      }
+
+      const importedCampaignNotes =
+        isRecord(parsed) && typeof parsed.campaignNotes === "string"
+          ? parsed.campaignNotes
+          : undefined;
+
+      await this.mutateState((state) => {
+        const usedIds = new Set(state.actors.map((actor) => actor.id));
+        const actors = [...state.actors];
+        importedActors.forEach((actor) => {
+          actors.push(
+            normaliseActor({
+              ...actor,
+              id: makeUniqueActorId(actor.id, actor.role, usedIds),
+            }),
+          );
+        });
+        return normaliseState({
+          ...state,
+          actors,
+          campaignNotes:
+            state.campaignNotes.trim() === "" && importedCampaignNotes != null
+              ? importedCampaignNotes
+              : state.campaignNotes,
+        });
+      });
+    } catch (error) {
+      this.setUiErrorMessage(
+        error instanceof Error ? error.message : "Failed to import character text.",
       );
     }
   }

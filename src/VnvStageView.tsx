@@ -1,4 +1,4 @@
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import { CSSProperties, useEffect, useState } from "react";
 import {
   ABILITY_RULES,
   ARMOUR_TABLE,
@@ -94,6 +94,38 @@ function scalePercentLabel(uiScale: number): string {
   return `${Math.round(uiScale * 100)}%`;
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText != null) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      void error;
+    }
+  }
+
+  if (typeof document === "undefined") {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "absolute";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    return document.execCommand("copy");
+  } catch (error) {
+    void error;
+    return false;
+  } finally {
+    textarea.remove();
+  }
+}
+
 function tabLabel(tab: TabKey): string {
   switch (tab) {
     case "builder":
@@ -123,158 +155,161 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
   const uiCollapsed = stage.getUiCollapsed();
   const [campaignNotesDraft, setCampaignNotesDraft] = useState(chatState.campaignNotes);
   const [encounterNotesDraft, setEncounterNotesDraft] = useState(chatState.encounter.notes);
+  const [transferDraft, setTransferDraft] = useState("");
+  const [importDraft, setImportDraft] = useState("");
+  const [copyLabel, setCopyLabel] = useState("Copy code");
   const scaleStyle = { "--ui-scale": uiScale } as CSSProperties;
 
   useEffect(() => stage.subscribe(() => setRevision((value) => value + 1)), [stage]);
   useEffect(() => setCampaignNotesDraft(chatState.campaignNotes), [chatState.campaignNotes]);
   useEffect(() => setEncounterNotesDraft(chatState.encounter.notes), [chatState.encounter.notes]);
+  useEffect(() => setCopyLabel("Copy code"), [transferDraft]);
 
   return (
     <div className="vnv-shell">
-      <section className="panel vnv-toolbar">
-        <div>
-          <p className="eyebrow">Stage Controls</p>
-          <h2>Visibility and scale</h2>
-          <p className="small-copy">
-            Collapse the stage to give the main chat more room. Hide From Chat removes the stage
-            from the thread until you reopen it with Chub&apos;s stage controls.
-          </p>
-        </div>
-        <div className="toolbar-actions">
-          <div className="scale-card">
-            <span>UI scale</span>
-            <div className="scale-row">
-              <input
-                type="range"
-                min={0.75}
-                max={1.3}
-                step={0.05}
-                value={uiScale}
-                onChange={(event) => stage.setUiScale(Number(event.target.value))}
-              />
-              <strong>{scalePercentLabel(uiScale)}</strong>
-            </div>
-          </div>
-          <button type="button" onClick={() => stage.setUiCollapsed(!uiCollapsed)}>
-            {uiCollapsed ? "Expand Stage" : "Collapse Stage"}
+      <div className={`vnv-dock${uiCollapsed ? " is-collapsed" : ""}`}>
+        <div className="vnv-dock-edge">
+          <button
+            type="button"
+            className="vnv-dock-toggle"
+            onClick={() => stage.setUiCollapsed(!uiCollapsed)}
+            aria-label={uiCollapsed ? "Expand stage" : "Collapse stage"}
+            title={uiCollapsed ? "Expand stage" : "Collapse stage"}
+          >
+            {uiCollapsed ? "<" : ">"}
           </button>
-          <button type="button" onClick={() => void stage.hideStageInChat()}>
-            Hide From Chat
-          </button>
+          {uiCollapsed ? <span className="vnv-dock-label">Stage hidden</span> : null}
         </div>
-      </section>
 
-      {uiError != null ? (
-        <div className="banner banner-error">
-          <span>{uiError}</span>
-          <button type="button" onClick={() => stage.clearUiError()}>
-            Dismiss
-          </button>
-        </div>
-      ) : null}
+        <div className="vnv-dock-panel">
+          {uiError != null ? (
+            <div className="banner banner-error">
+              <span>{uiError}</span>
+              <button type="button" onClick={() => stage.clearUiError()}>
+                Dismiss
+              </button>
+            </div>
+          ) : null}
 
-      {uiCollapsed ? (
-        <section className="panel vnv-collapsed">
-          <div>
-            <p className="eyebrow">Stage Collapsed</p>
-            <h2>Chat-first view</h2>
-            <p className="small-copy">
-              Expand the stage when you want to edit sheets or track combat again.
-            </p>
-          </div>
-          <div className="hero-stats">
-            <div className="stat-chip">
-              <span>Tracked actors</span>
-              <strong>{chatState.actors.length}</strong>
-            </div>
-            <div className="stat-chip">
-              <span>Control mode</span>
-              <strong>{controlModeLabel(chatState.controlMode)}</strong>
-            </div>
-            <div className="stat-chip">
-              <span>Encounter</span>
-              <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
-            </div>
-          </div>
-        </section>
-      ) : (
-        <div className="vnv-scale-shell" style={scaleStyle}>
-          <header className="vnv-hero">
+          <section className="panel vnv-toolbar">
             <div>
               <p className="eyebrow">Vice & Violence Stage</p>
-              <h1>Sheets, combat state, and prompt rules in one place</h1>
-              <p className="hero-copy">
-                OCR-backed helper for character setup, encounter tracking, and V&V-flavored
-                prompt injection.
+              <h2>Sheets and combat state</h2>
+              <p className="small-copy">
+                Collapse the stage with the edge handle. Hide From Chat uses Chub&apos;s own stage
+                hide control and you may need to reopen it from the host UI.
               </p>
             </div>
-            <div className="hero-stats">
-              <div className="stat-chip">
-                <span>Lewd level</span>
-                <strong>{config.lewdLevel}</strong>
+            <div className="toolbar-actions">
+              <div className="scale-card">
+                <span>UI scale</span>
+                <div className="scale-row">
+                  <input
+                    type="range"
+                    min={0.75}
+                    max={1.3}
+                    step={0.05}
+                    value={uiScale}
+                    onChange={(event) => stage.setUiScale(Number(event.target.value))}
+                  />
+                  <strong>{scalePercentLabel(uiScale)}</strong>
+                </div>
               </div>
-              <div className="stat-chip">
-                <span>Stage directions</span>
-                <strong>{config.includeStageDirections ? "On" : "Off"}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Tracked actors</span>
-                <strong>{chatState.actors.length}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Control mode</span>
-                <strong>{controlModeLabel(chatState.controlMode)}</strong>
-              </div>
-              <div className="stat-chip">
-                <span>Encounter</span>
-                <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
-              </div>
-            </div>
-          </header>
-
-          <nav className="vnv-tabs">
-            {(["builder", "encounter", "reference"] as TabKey[]).map((value) => (
-              <button
-                key={value}
-                type="button"
-                className={value === tab ? "is-active" : ""}
-                onClick={() => setTab(value)}
-              >
-                {tabLabel(value)}
+              <button type="button" onClick={() => void stage.hideStageInChat()}>
+                Hide From Chat
               </button>
-            ))}
-          </nav>
+            </div>
+          </section>
 
-          <div className="vnv-layout">
-            <section className="vnv-main">
-              {tab === "builder" ? (
-                <BuilderPanel
-                  stage={stage}
-                  actors={chatState.actors}
-                  controlMode={chatState.controlMode}
-                  campaignNotesDraft={campaignNotesDraft}
-                  setCampaignNotesDraft={setCampaignNotesDraft}
-                />
-              ) : null}
-              {tab === "encounter" ? (
-                <EncounterPanel
-                  stage={stage}
-                  controlMode={chatState.controlMode}
-                  encounterNotesDraft={encounterNotesDraft}
-                  setEncounterNotesDraft={setEncounterNotesDraft}
-                />
-              ) : null}
-              {tab === "reference" ? <ReferencePanel /> : null}
-            </section>
+          <div className="vnv-scale-shell" style={scaleStyle}>
+            <header className="vnv-hero">
+              <div>
+                <p className="eyebrow">Stage</p>
+                <h1>Sheets, combat state, and prompt rules</h1>
+                <p className="hero-copy">
+                  Party setup, initiative tracking, prompt guidance, and reusable transfer codes.
+                </p>
+              </div>
+              <div className="hero-stats">
+                <div className="stat-chip">
+                  <span>Lewd level</span>
+                  <strong>{config.lewdLevel}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Stage directions</span>
+                  <strong>{config.includeStageDirections ? "On" : "Off"}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Tracked actors</span>
+                  <strong>{chatState.actors.length}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Control mode</span>
+                  <strong>{controlModeLabel(chatState.controlMode)}</strong>
+                </div>
+                <div className="stat-chip">
+                  <span>Encounter</span>
+                  <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
+                </div>
+              </div>
+            </header>
 
-            <aside className="vnv-side">
-              <DiceTray stage={stage} />
-              <RollLog entries={chatState.rollLog} />
-              <PromptPreview preview={stage.previewStageDirections()} />
-            </aside>
+            <nav className="vnv-tabs">
+              {(["builder", "encounter", "reference"] as TabKey[]).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={value === tab ? "is-active" : ""}
+                  onClick={() => setTab(value)}
+                >
+                  {tabLabel(value)}
+                </button>
+              ))}
+            </nav>
+
+            <div className="vnv-layout">
+              <section className="vnv-main">
+                {tab === "builder" ? (
+                  <BuilderPanel
+                    stage={stage}
+                    actors={chatState.actors}
+                    controlMode={chatState.controlMode}
+                    campaignNotesDraft={campaignNotesDraft}
+                    setCampaignNotesDraft={setCampaignNotesDraft}
+                    transferDraft={transferDraft}
+                    setTransferDraft={setTransferDraft}
+                    importDraft={importDraft}
+                    setImportDraft={setImportDraft}
+                    copyLabel={copyLabel}
+                    onCopyTransfer={async () => {
+                      if (transferDraft.trim() === "") {
+                        return;
+                      }
+                      const copied = await copyTextToClipboard(transferDraft);
+                      setCopyLabel(copied ? "Copied" : "Copy failed");
+                    }}
+                  />
+                ) : null}
+                {tab === "encounter" ? (
+                  <EncounterPanel
+                    stage={stage}
+                    controlMode={chatState.controlMode}
+                    encounterNotesDraft={encounterNotesDraft}
+                    setEncounterNotesDraft={setEncounterNotesDraft}
+                  />
+                ) : null}
+                {tab === "reference" ? <ReferencePanel /> : null}
+              </section>
+
+              <aside className="vnv-side">
+                <DiceTray stage={stage} />
+                <RollLog entries={chatState.rollLog} />
+                <PromptPreview preview={stage.previewStageDirections()} />
+              </aside>
+            </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -285,6 +320,12 @@ interface BuilderPanelProps {
   controlMode: ControlMode;
   campaignNotesDraft: string;
   setCampaignNotesDraft: (value: string) => void;
+  transferDraft: string;
+  setTransferDraft: (value: string) => void;
+  importDraft: string;
+  setImportDraft: (value: string) => void;
+  copyLabel: string;
+  onCopyTransfer: () => Promise<void>;
 }
 
 function BuilderPanel({
@@ -293,9 +334,14 @@ function BuilderPanel({
   controlMode,
   campaignNotesDraft,
   setCampaignNotesDraft,
+  transferDraft,
+  setTransferDraft,
+  importDraft,
+  setImportDraft,
+  copyLabel,
+  onCopyTransfer,
 }: BuilderPanelProps) {
   const isSetup = controlMode === "setup";
-  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <div className="panel-stack">
@@ -306,7 +352,7 @@ function BuilderPanel({
             <h2>Roster and notes</h2>
             <p className="small-copy">
               {isSetup
-                ? "Add player characters, allies, and NPCs here. Import character files, then hand the roster to the system when play begins."
+                ? "Add player characters, allies, and NPCs here. Export them as text codes and paste codes into the importer at the bottom."
                 : "Roster edits are locked. The model now owns enemy creation, roster changes, and turn-order reshuffling. Browser backup stays active across refreshes."}
             </p>
           </div>
@@ -321,15 +367,8 @@ function BuilderPanel({
                 Add {niceRole(role)}
               </button>
             ))}
-            <button
-              type="button"
-              disabled={!isSetup}
-              onClick={() => importInputRef.current?.click()}
-            >
-              Import Character File
-            </button>
-            <button type="button" onClick={() => void stage.exportRoster()}>
-              Save Roster File
+            <button type="button" onClick={() => setTransferDraft(stage.createRosterTransferCode())}>
+              Export Roster Code
             </button>
             <button
               type="button"
@@ -339,20 +378,6 @@ function BuilderPanel({
             </button>
           </div>
         </div>
-        <input
-          ref={importInputRef}
-          type="file"
-          className="sr-only"
-          accept=".json,application/json"
-          multiple
-          onChange={(event) => {
-            const files = event.target.files;
-            if (files != null && files.length > 0) {
-              void stage.importCharacterFiles(files);
-            }
-            event.target.value = "";
-          }}
-        />
         <label className="field field-wide">
           <span>Campaign notes</span>
           <textarea
@@ -382,8 +407,66 @@ function BuilderPanel({
               actor={actor}
               stage={stage}
               controlMode={controlMode}
+              setTransferDraft={setTransferDraft}
             />
           ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Transfer</p>
+            <h2>Export and import codes</h2>
+            <p className="small-copy">
+              Exported code can be copied into notes, documents, or another chat. The importer accepts a single
+              character code or a full roster code.
+            </p>
+          </div>
+          <div className="button-row">
+            <button
+              type="button"
+              disabled={transferDraft.trim() === ""}
+              onClick={() => void onCopyTransfer()}
+            >
+              {copyLabel}
+            </button>
+            <button type="button" onClick={() => setTransferDraft("")}>
+              Clear export
+            </button>
+          </div>
+        </div>
+        <div className="transfer-grid">
+          <label className="field">
+            <span>Exported code</span>
+            <textarea
+              rows={14}
+              value={transferDraft}
+              readOnly
+              placeholder="Export a roster or actor to generate reusable code here."
+            />
+          </label>
+          <label className="field">
+            <span>Character importer</span>
+            <textarea
+              rows={14}
+              value={importDraft}
+              onChange={(event) => setImportDraft(event.target.value)}
+              placeholder='Paste a {"format":"vnv-actor"...} or {"format":"vnv-roster"...} block here.'
+            />
+          </label>
+        </div>
+        <div className="button-row">
+          <button
+            type="button"
+            disabled={!isSetup || importDraft.trim() === ""}
+            onClick={() => void stage.importCharacterText(importDraft)}
+          >
+            Import pasted code
+          </button>
+          <button type="button" onClick={() => setImportDraft("")}>
+            Clear importer
+          </button>
         </div>
       </section>
     </div>
@@ -394,9 +477,10 @@ interface ActorEditorCardProps {
   actor: ActorSheet;
   stage: Stage;
   controlMode: ControlMode;
+  setTransferDraft: (value: string) => void;
 }
 
-function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
+function ActorEditorCard({ actor, stage, controlMode, setTransferDraft }: ActorEditorCardProps) {
   const actorFingerprint = JSON.stringify(actor);
   const [draft, setDraft] = useState<ActorSheet>(() => cloneActor(actor));
   const editable = controlMode === "setup";
@@ -437,8 +521,11 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           {!editable ? <p className="small-copy">System-managed during play.</p> : null}
         </div>
         <div className="button-row">
-          <button type="button" onClick={() => void stage.exportActorSheet(draft)}>
-            Save file
+          <button
+            type="button"
+            onClick={() => setTransferDraft(stage.createActorTransferCode(draft))}
+          >
+            Export code
           </button>
           {editable ? (
             <>
