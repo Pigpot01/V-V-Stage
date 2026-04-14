@@ -58,6 +58,17 @@ button:hover {
   border-color: rgba(222, 182, 108, 0.65);
 }
 
+button:disabled {
+  opacity: 0.54;
+  cursor: not-allowed;
+  transform: none;
+}
+
+button:disabled:hover {
+  transform: none;
+  border-color: var(--panel-line);
+}
+
 button.danger {
   background: linear-gradient(180deg, rgba(117, 18, 29, 0.98), rgba(78, 10, 19, 0.98));
 }
@@ -73,6 +84,13 @@ textarea,
   padding: 0.7rem 0.8rem;
   color: var(--ink);
   background: rgba(255, 250, 239, 0.92);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
 }
 
 textarea {
@@ -217,7 +235,8 @@ textarea {
 .formula-grid,
 .two-column,
 .three-column,
-.card-grid {
+.card-grid,
+.dice-form {
   display: grid;
   gap: 12px;
 }
@@ -244,6 +263,11 @@ textarea {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
+.dice-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -259,6 +283,17 @@ textarea {
   border-radius: 22px;
   border: 1px solid rgba(76, 31, 31, 0.15);
   background: rgba(255, 250, 239, 0.72);
+}
+
+.actor-card.is-locked {
+  background: rgba(255, 250, 239, 0.62);
+}
+
+.actor-editor-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
 .encounter-card.active {
@@ -338,7 +373,8 @@ textarea {
 
   .two-column,
   .field-grid,
-  .formula-grid {
+  .formula-grid,
+  .dice-form {
     grid-template-columns: 1fr;
   }
 }

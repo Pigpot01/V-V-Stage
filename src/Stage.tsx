@@ -19,8 +19,10 @@ import {
 import { createActor, createDefaultState } from "./sampleState";
 import { buildStageDirections, formatSigned, ResolvedStageConfig } from "./stageText";
 import {
+  ActorAbilities,
   ActorRole,
   ActorSheet,
+  ControlMode,
   EncounterState,
   RollLogEntry,
   StageChatState,
@@ -31,6 +33,46 @@ import { VnvStageView } from "./VnvStageView";
 
 type UpdateListener = () => void;
 type TrackableResource = "spellUses" | "exertion" | "disposition";
+type SurpriseType = EncounterState["surprise"];
+
+interface AutomationActorPatch {
+  id?: string;
+  role?: ActorRole;
+  name?: string;
+  kin?: string;
+  className?: string;
+  background?: string;
+  birthsign?: string;
+  boon?: string;
+  level?: number;
+  lifeCurrent?: number;
+  lifeMax?: number;
+  spellUsesCurrent?: number;
+  spellUsesMax?: number;
+  exertionCurrent?: number;
+  exertionMax?: number;
+  disposition?: number;
+  initiative?: ActorSheet["initiative"];
+  weaponName?: string;
+  weaponDie?: string;
+  weaponMaterial?: number;
+  armourType?: ActorSheet["armourType"];
+  armourSaveDie?: string;
+  abilities?: Partial<ActorAbilities>;
+  statuses?: string[];
+  movesText?: string;
+  inventoryText?: string;
+  notes?: string;
+}
+
+interface AutomationPatch {
+  upsertActors: AutomationActorPatch[];
+  removeActorIds: string[];
+  actorOrder: string[];
+  encounter: Partial<EncounterState>;
+  rolls: Array<Pick<RollLogEntry, "label" | "detail">>;
+  campaignNotes?: string;
+}
 
 const DEFAULT_CONFIG: ResolvedStageConfig = {
   includeStageDirections: true,
@@ -39,6 +81,17 @@ const DEFAULT_CONFIG: ResolvedStageConfig = {
 };
 
 const MAX_ROLL_LOG = 24;
+const STATE_BLOCK_PATTERN = /<<VNV_STATE>>\s*([\s\S]*?)\s*<<\/VNV_STATE>>/m;
+const ACTOR_ROLES: ActorRole[] = ["player", "ally", "enemy", "npc"];
+const INITIATIVE_TYPES: ActorSheet["initiative"][] = [
+  "manual",
+  "preemptive",
+  "interspersed",
+  "reactive",
+  "rapid",
+];
+const ARMOUR_TYPES: ActorSheet["armourType"][] = ["skimpy", "light", "medium", "full"];
+const SURPRISE_TYPES: SurpriseType[] = ["none", "party", "enemy"];
 
 function makeId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -46,6 +99,270 @@ function makeId(prefix: string): string {
 
 function normaliseText(value: string): string {
   return value.replace(/\r/g, "").trim();
+}
+
+function normaliseId(value: string): string {
+  return normaliseText(value).replace(/\s+/g, "-");
+}
+
+function normaliseControlMode(value: ControlMode | undefined): ControlMode {
+  return value === "system" ? "system" : "setup";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => normaliseText(entry))
+    .filter((entry) => entry !== "");
+}
+
+function readActorRole(value: unknown): ActorRole | undefined {
+  return typeof value === "string" && ACTOR_ROLES.includes(value as ActorRole)
+    ? (value as ActorRole)
+    : undefined;
+}
+
+function readInitiative(value: unknown): ActorSheet["initiative"] | undefined {
+  return typeof value === "string" && INITIATIVE_TYPES.includes(value as ActorSheet["initiative"])
+    ? (value as ActorSheet["initiative"])
+    : undefined;
+}
+
+function readArmourType(value: unknown): ActorSheet["armourType"] | undefined {
+  return typeof value === "string" && ARMOUR_TYPES.includes(value as ActorSheet["armourType"])
+    ? (value as ActorSheet["armourType"])
+    : undefined;
+}
+
+function readSurprise(value: unknown): SurpriseType | undefined {
+  return typeof value === "string" && SURPRISE_TYPES.includes(value as SurpriseType)
+    ? (value as SurpriseType)
+    : undefined;
+}
+
+function stripJsonFence(value: string): string {
+  const trimmed = value.trim();
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenceMatch == null ? trimmed : fenceMatch[1].trim();
+}
+
+function extractAutomationBlock(content: string): {
+  visibleContent: string | null;
+  patch: AutomationPatch | null;
+  error: string | null;
+} {
+  const match = STATE_BLOCK_PATTERN.exec(content);
+  if (match == null) {
+    return { visibleContent: null, patch: null, error: null };
+  }
+
+  const before = content.slice(0, match.index);
+  const after = content.slice(match.index + match[0].length);
+  const visibleContent = `${before}${after}`.replace(/\n{3,}/g, "\n\n").trim();
+
+  try {
+    const parsed = JSON.parse(stripJsonFence(match[1]));
+    return {
+      visibleContent,
+      patch: sanitiseAutomationPatch(parsed),
+      error: null,
+    };
+  } catch (error) {
+    void error;
+    return {
+      visibleContent,
+      patch: null,
+      error: "Ignored a malformed VNV state patch from the model response.",
+    };
+  }
+}
+
+function sanitiseAutomationPatch(value: unknown): AutomationPatch | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const upsertActors = Array.isArray(value.upsertActors)
+    ? value.upsertActors
+        .map((entry) => sanitiseAutomationActorPatch(entry))
+        .filter((entry): entry is AutomationActorPatch => entry != null)
+    : [];
+
+  const removeActorIds = readStringArray(value.removeActorIds) ?? [];
+  const actorOrder = readStringArray(value.actorOrder) ?? [];
+  const rolls = Array.isArray(value.rolls)
+    ? value.rolls
+        .map((entry) => sanitiseAutomationRoll(entry))
+        .filter((entry): entry is Pick<RollLogEntry, "label" | "detail"> => entry != null)
+    : [];
+
+  const encounter = sanitiseEncounterPatch(value.encounter);
+  const campaignNotes = readString(value.campaignNotes);
+
+  return {
+    upsertActors,
+    removeActorIds,
+    actorOrder,
+    encounter,
+    rolls,
+    ...(campaignNotes !== undefined ? { campaignNotes } : {}),
+  };
+}
+
+function sanitiseAutomationActorPatch(value: unknown): AutomationActorPatch | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const patch: AutomationActorPatch = {};
+  const id = readString(value.id);
+  const role = readActorRole(value.role);
+  const initiative = readInitiative(value.initiative);
+  const armourType = readArmourType(value.armourType);
+  const statuses = readStringArray(value.statuses);
+
+  if (id !== undefined && normaliseId(id) !== "") {
+    patch.id = normaliseId(id);
+  }
+  if (role !== undefined) {
+    patch.role = role;
+  }
+  if (initiative !== undefined) {
+    patch.initiative = initiative;
+  }
+  if (armourType !== undefined) {
+    patch.armourType = armourType;
+  }
+  if (statuses !== undefined) {
+    patch.statuses = statuses;
+  }
+
+  const name = readString(value.name);
+  const kin = readString(value.kin);
+  const className = readString(value.className);
+  const background = readString(value.background);
+  const birthsign = readString(value.birthsign);
+  const boon = readString(value.boon);
+  const weaponName = readString(value.weaponName);
+  const weaponDie = readString(value.weaponDie);
+  const armourSaveDie = readString(value.armourSaveDie);
+  const movesText = readString(value.movesText);
+  const inventoryText = readString(value.inventoryText);
+  const notes = readString(value.notes);
+  const level = readNumber(value.level);
+  const lifeCurrent = readNumber(value.lifeCurrent);
+  const lifeMax = readNumber(value.lifeMax);
+  const spellUsesCurrent = readNumber(value.spellUsesCurrent);
+  const spellUsesMax = readNumber(value.spellUsesMax);
+  const exertionCurrent = readNumber(value.exertionCurrent);
+  const exertionMax = readNumber(value.exertionMax);
+  const disposition = readNumber(value.disposition);
+  const weaponMaterial = readNumber(value.weaponMaterial);
+
+  if (name !== undefined) patch.name = name;
+  if (kin !== undefined) patch.kin = kin;
+  if (className !== undefined) patch.className = className;
+  if (background !== undefined) patch.background = background;
+  if (birthsign !== undefined) patch.birthsign = birthsign;
+  if (boon !== undefined) patch.boon = boon;
+  if (weaponName !== undefined) patch.weaponName = weaponName;
+  if (weaponDie !== undefined) patch.weaponDie = weaponDie;
+  if (armourSaveDie !== undefined) patch.armourSaveDie = armourSaveDie;
+  if (movesText !== undefined) patch.movesText = movesText;
+  if (inventoryText !== undefined) patch.inventoryText = inventoryText;
+  if (notes !== undefined) patch.notes = notes;
+  if (level !== undefined) patch.level = level;
+  if (lifeCurrent !== undefined) patch.lifeCurrent = lifeCurrent;
+  if (lifeMax !== undefined) patch.lifeMax = lifeMax;
+  if (spellUsesCurrent !== undefined) patch.spellUsesCurrent = spellUsesCurrent;
+  if (spellUsesMax !== undefined) patch.spellUsesMax = spellUsesMax;
+  if (exertionCurrent !== undefined) patch.exertionCurrent = exertionCurrent;
+  if (exertionMax !== undefined) patch.exertionMax = exertionMax;
+  if (disposition !== undefined) patch.disposition = disposition;
+  if (weaponMaterial !== undefined) patch.weaponMaterial = weaponMaterial;
+
+  const abilitiesValue = value.abilities;
+  if (isRecord(abilitiesValue)) {
+    const abilities: Partial<ActorAbilities> = {};
+    (["smarts", "brawn", "moxie", "hotness"] as const).forEach((key) => {
+      const nextValue = readNumber(abilitiesValue[key]);
+      if (nextValue !== undefined) {
+        abilities[key] = nextValue;
+      }
+    });
+    if (Object.keys(abilities).length > 0) {
+      patch.abilities = abilities;
+    }
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function sanitiseEncounterPatch(value: unknown): Partial<EncounterState> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const patch: Partial<EncounterState> = {};
+  const active = readBoolean(value.active);
+  const round = readNumber(value.round);
+  const activeActorId = value.activeActorId === null ? null : readString(value.activeActorId);
+  const surprise = readSurprise(value.surprise);
+  const notes = readString(value.notes);
+
+  if (active !== undefined) {
+    patch.active = active;
+  }
+  if (round !== undefined) {
+    patch.round = round;
+  }
+  if (activeActorId !== undefined) {
+    patch.activeActorId = activeActorId == null ? null : normaliseId(activeActorId);
+  }
+  if (surprise !== undefined) {
+    patch.surprise = surprise;
+  }
+  if (notes !== undefined) {
+    patch.notes = notes;
+  }
+
+  return patch;
+}
+
+function sanitiseAutomationRoll(value: unknown): Pick<RollLogEntry, "label" | "detail"> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const label = readString(value.label);
+  const detail = readString(value.detail);
+  if (label == null || detail == null) {
+    return null;
+  }
+
+  return {
+    label: normaliseText(label),
+    detail: normaliseText(detail),
+  };
 }
 
 function armourSaveForType(armourType: ActorSheet["armourType"]): string {
@@ -77,7 +394,7 @@ function normaliseActor(actor: ActorSheet): ActorSheet {
   const exertionMax = Math.max(0, Math.trunc(actor.exertionMax));
   return {
     ...actor,
-    id: actor.id || makeId(actor.role),
+    id: normaliseId(actor.id) || makeId(actor.role),
     name: normaliseText(actor.name) || defaultNameForRole(actor.role),
     kin: normaliseText(actor.kin),
     className: normaliseText(actor.className),
@@ -157,12 +474,99 @@ function normaliseEncounter(
 function normaliseState(state: StageChatState): StageChatState {
   const actors = state.actors.map((actor) => normaliseActor(actor));
   return {
-    version: 1,
+    version: 2,
+    controlMode: normaliseControlMode(state.controlMode),
     actors,
     encounter: normaliseEncounter(state.encounter, actors),
     rollLog: state.rollLog.slice(0, MAX_ROLL_LOG),
     campaignNotes: normaliseText(state.campaignNotes),
   };
+}
+
+function mergeActorPatch(
+  current: ActorSheet | undefined,
+  patch: AutomationActorPatch,
+): ActorSheet {
+  const role = patch.role ?? current?.role ?? "enemy";
+  const base = current ?? createActor(role);
+  const mergedAbilities = patch.abilities == null
+    ? base.abilities
+    : {
+        ...base.abilities,
+        ...patch.abilities,
+      };
+  const mergedStatuses = patch.statuses ?? base.statuses;
+
+  return normaliseActor({
+    ...base,
+    ...patch,
+    role,
+    id: patch.id ?? current?.id ?? base.id,
+    abilities: mergedAbilities,
+    statuses: mergedStatuses,
+  });
+}
+
+function reorderActors(actors: ActorSheet[], actorOrder: string[]): ActorSheet[] {
+  if (actorOrder.length === 0) {
+    return actors;
+  }
+
+  const order = actorOrder.map((id) => normaliseId(id)).filter((id) => id !== "");
+  const seen = new Set<string>();
+  const ordered = order
+    .map((id) => actors.find((actor) => actor.id === id))
+    .filter((actor): actor is ActorSheet => actor != null)
+    .filter((actor) => {
+      if (seen.has(actor.id)) {
+        return false;
+      }
+      seen.add(actor.id);
+      return true;
+    });
+  const remainder = actors.filter((actor) => !seen.has(actor.id));
+  return [...ordered, ...remainder];
+}
+
+function applyAutomationPatch(state: StageChatState, patch: AutomationPatch): StageChatState {
+  let actors = [...state.actors];
+
+  patch.upsertActors.forEach((actorPatch) => {
+    const actorId = actorPatch.id != null ? normaliseId(actorPatch.id) : "";
+    const index = actorId === "" ? -1 : actors.findIndex((actor) => actor.id === actorId);
+
+    if (index === -1) {
+      actors.push(mergeActorPatch(undefined, actorPatch));
+      return;
+    }
+
+    actors[index] = mergeActorPatch(actors[index], actorPatch);
+  });
+
+  if (patch.removeActorIds.length > 0) {
+    const removeIds = new Set(patch.removeActorIds.map((id) => normaliseId(id)));
+    actors = actors.filter((actor) => !removeIds.has(actor.id));
+  }
+
+  actors = reorderActors(actors, patch.actorOrder);
+
+  let nextState = normaliseState({
+    ...state,
+    ...(patch.campaignNotes !== undefined
+      ? { campaignNotes: patch.campaignNotes }
+      : {}),
+    actors,
+    encounter: {
+      ...state.encounter,
+      ...patch.encounter,
+    },
+  });
+
+  patch.rolls.forEach((roll) => {
+    nextState = pushRoll(nextState, roll.label, roll.detail);
+  });
+
+  return nextState;
 }
 
 export class Stage extends StageBase<
@@ -226,13 +630,24 @@ export class Stage extends StageBase<
   async afterResponse(
     botMessage: Message,
   ): Promise<Partial<StageResponse<StageChatState, StageMessageState>>> {
-    void botMessage;
+    const automation = extractAutomationBlock(botMessage.content);
+    const patch = automation.patch;
+    let error: string | null = automation.error;
+
+    if (patch != null) {
+      if (this.chatStateData.controlMode === "system") {
+        await this.mutateState((state) => applyAutomationPatch(state, patch));
+      } else {
+        error = "Ignored a VNV state patch because setup mode is still active.";
+      }
+    }
+
     return {
       stageDirections: null,
       messageState: this.messageStateData,
-      modifiedMessage: null,
+      modifiedMessage: automation.visibleContent,
       systemMessage: null,
-      error: null,
+      error,
       chatState: null,
     };
   }
@@ -265,7 +680,17 @@ export class Stage extends StageBase<
     };
   }
 
+  async setControlMode(controlMode: ControlMode): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      controlMode,
+    }));
+  }
+
   async saveActor(actor: ActorSheet): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     const nextActor = normaliseActor(actor);
     await this.mutateState((state) => {
       const index = state.actors.findIndex((entry) => entry.id === nextActor.id);
@@ -281,6 +706,9 @@ export class Stage extends StageBase<
   }
 
   async addActor(role: ActorRole): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     await this.mutateState((state) =>
       normaliseState({
         ...state,
@@ -290,6 +718,9 @@ export class Stage extends StageBase<
   }
 
   async duplicateActor(actorId: string): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     const actor = this.chatStateData.actors.find((entry) => entry.id === actorId);
     if (actor == null) {
       return;
@@ -310,6 +741,9 @@ export class Stage extends StageBase<
   }
 
   async removeActor(actorId: string): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     await this.mutateState((state) =>
       normaliseState({
         ...state,
@@ -319,6 +753,9 @@ export class Stage extends StageBase<
   }
 
   async moveActor(actorId: string, direction: -1 | 1): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     await this.mutateState((state) => {
       const index = state.actors.findIndex((actor) => actor.id === actorId);
       if (index === -1) {
@@ -410,6 +847,9 @@ export class Stage extends StageBase<
   }
 
   async setActiveActor(actorId: string | null): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
     await this.mutateState((state) =>
       normaliseState({
         ...state,

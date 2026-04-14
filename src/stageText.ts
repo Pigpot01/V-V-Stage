@@ -34,12 +34,13 @@ function formatAbilities(actor: ActorSheet): string {
 function compactActorLine(actor: ActorSheet): string {
   const statuses = actor.statuses.length > 0 ? ` | Statuses: ${actor.statuses.join(", ")}` : "";
   const sign = actor.birthsign !== "" ? ` | Birthsign: ${actor.birthsign}` : "";
-  return `${actor.name}: ${formatRole(actor)} | ${formatResources(actor)} | ${formatAbilities(actor)} | Attack ${describeAttack(actor)} | ${describeArmour(actor)}${sign}${statuses}`;
+  return `[${actor.id}] ${actor.name}: ${formatRole(actor)} | ${formatResources(actor)} | ${formatAbilities(actor)} | Attack ${describeAttack(actor)} | ${describeArmour(actor)}${sign}${statuses}`;
 }
 
 function fullActorBlock(actor: ActorSheet): string {
   const lines = [
     `${actor.name}`,
+    `Ref: ${actor.id}`,
     `Role: ${formatRole(actor)}`,
     `Resources: ${formatResources(actor)}`,
     `Abilities: ${formatAbilities(actor)}`,
@@ -89,6 +90,18 @@ export function buildStageDirections(
   const sections: string[] = [];
   sections.push("Use the following Vice & Violence stage state as the authoritative mechanics reference for this scene.");
   sections.push(buildCorePromptRules(config.lewdLevel).join("\n"));
+  sections.push(
+    state.controlMode === "setup"
+      ? "Control mode: setup. The player is still defining the party manually, so do not append system state patches."
+      : [
+          "Control mode: system. The player no longer manages enemies, roster composition, or turn order manually.",
+          "When state should change, append a hidden JSON block after your visible reply in exactly this format:",
+          "<<VNV_STATE>>",
+          '{"upsertActors":[{"id":"enemy-bandit-1","role":"enemy","name":"Bandit"}],"removeActorIds":[],"actorOrder":["player-main","enemy-bandit-1"],"encounter":{"active":true,"round":1,"activeActorId":"player-main","surprise":"none"},"rolls":[{"label":"Bandit attack","detail":"d8 + material 1 + Brawn 1 = 7"}]}',
+          "<</VNV_STATE>>",
+          "Use valid JSON only. Omit keys that did not change. Actor ids in brackets are the refs to update. For actors, `statuses` replaces the full status list and `abilities` may contain only the changed ability scores.",
+        ].join("\n"),
+  );
   sections.push(`Campaign notes: ${state.campaignNotes.trim() !== "" ? state.campaignNotes.trim().replace(/\n+/g, " | ") : "None."}`);
   sections.push(buildEncounterPromptSummary(state.encounter, state.actors));
   if (state.actors.length > 0) {

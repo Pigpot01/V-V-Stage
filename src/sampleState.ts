@@ -63,6 +63,7 @@ export function createActor(role: ActorRole = "player"): ActorSheet {
 
 export function createDefaultState(): StageChatState {
   const hero = createActor("player");
+  hero.id = "player-main";
   hero.name = "Wyll Buttons";
   hero.kin = "Dweller";
   hero.className = "Would-Be Bard";
@@ -82,25 +83,10 @@ export function createDefaultState(): StageChatState {
   hero.movesText = "The One About the Fair Maiden\nHeal";
   hero.inventoryText = "Lantern and oil\nA pair of reading glasses";
 
-  const foe = createActor("enemy");
-  foe.name = "Goatfolk Highwayman";
-  foe.kin = "Humanoid Enemy";
-  foe.className = "Bandit";
-  foe.level = 0;
-  foe.lifeCurrent = 10;
-  foe.lifeMax = 10;
-  foe.weaponName = "Axe";
-  foe.weaponDie = "d8";
-  foe.weaponMaterial = 1;
-  foe.armourType = "skimpy";
-  foe.armourSaveDie = armourSaveFor("skimpy");
-  foe.abilities = { smarts: -1, brawn: 1, moxie: 0, hotness: -2 };
-  foe.disposition = -7;
-  foe.initiative = "interspersed";
-
   return {
-    version: 1,
-    actors: [hero, foe],
+    version: 2,
+    controlMode: "setup",
+    actors: [hero],
     encounter: {
       active: false,
       round: 1,
@@ -110,6 +96,6 @@ export function createDefaultState(): StageChatState {
     },
     rollLog: [],
     campaignNotes:
-      "Use this stage as a manual V&V sheet, encounter tracker, and prompt anchor. Add class-specific skills and spells to actor notes as you learn them.",
+      "Use this stage to set up the party, then hand roster control to the system once play begins.",
   };
 }

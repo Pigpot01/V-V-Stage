@@ -12,6 +12,7 @@ export type InitiativeType =
   | "rapid";
 
 export type LewdLevel = "LL1" | "LL2" | "LL3";
+export type ControlMode = "setup" | "system";
 
 export interface ActorAbilities {
   smarts: number;
@@ -66,6 +67,7 @@ export interface RollLogEntry {
 
 export interface StageChatState {
   version: number;
+  controlMode: ControlMode;
   actors: ActorSheet[];
   encounter: EncounterState;
   rollLog: RollLogEntry[];

@@ -15,11 +15,12 @@ import {
 } from "./rules";
 import { describeArmour, describeAttack, formatSigned } from "./stageText";
 import type { Stage } from "./Stage";
-import { ActorRole, ActorSheet, ArmourType, InitiativeType, RollLogEntry } from "./types";
+import { ActorRole, ActorSheet, ArmourType, ControlMode, InitiativeType, RollLogEntry } from "./types";
 
 type TabKey = "builder" | "encounter" | "reference";
 
 const ROLE_OPTIONS: ActorRole[] = ["player", "ally", "enemy", "npc"];
+const SETUP_ROLE_OPTIONS: ActorRole[] = ["player", "ally", "npc"];
 const INITIATIVE_OPTIONS: InitiativeType[] = [
   "manual",
   "preemptive",
@@ -75,6 +76,10 @@ function tabLabel(tab: TabKey): string {
   }
 }
 
+function controlModeLabel(controlMode: ControlMode): string {
+  return controlMode === "setup" ? "Setup Open" : "System Control";
+}
+
 interface VnvStageViewProps {
   stage: Stage;
 }
@@ -117,6 +122,10 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
             <strong>{chatState.actors.length}</strong>
           </div>
           <div className="stat-chip">
+            <span>Control mode</span>
+            <strong>{controlModeLabel(chatState.controlMode)}</strong>
+          </div>
+          <div className="stat-chip">
             <span>Encounter</span>
             <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
           </div>
@@ -151,6 +160,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
             <BuilderPanel
               stage={stage}
               actors={chatState.actors}
+              controlMode={chatState.controlMode}
               campaignNotesDraft={campaignNotesDraft}
               setCampaignNotesDraft={setCampaignNotesDraft}
             />
@@ -158,6 +168,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
           {tab === "encounter" ? (
             <EncounterPanel
               stage={stage}
+              controlMode={chatState.controlMode}
               encounterNotesDraft={encounterNotesDraft}
               setEncounterNotesDraft={setEncounterNotesDraft}
             />
@@ -178,6 +189,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
 interface BuilderPanelProps {
   stage: Stage;
   actors: ActorSheet[];
+  controlMode: ControlMode;
   campaignNotesDraft: string;
   setCampaignNotesDraft: (value: string) => void;
 }
@@ -185,9 +197,12 @@ interface BuilderPanelProps {
 function BuilderPanel({
   stage,
   actors,
+  controlMode,
   campaignNotesDraft,
   setCampaignNotesDraft,
 }: BuilderPanelProps) {
+  const isSetup = controlMode === "setup";
+
   return (
     <div className="panel-stack">
       <section className="panel">
@@ -195,13 +210,29 @@ function BuilderPanel({
           <div>
             <p className="eyebrow">Party Builder</p>
             <h2>Roster and notes</h2>
+            <p className="small-copy">
+              {isSetup
+                ? "Add player characters, allies, and NPCs here. Once play begins, hand the roster to the system."
+                : "Roster edits are locked. The model now owns enemy creation, roster changes, and turn-order reshuffling."}
+            </p>
           </div>
           <div className="button-row">
-            {ROLE_OPTIONS.map((role) => (
-              <button key={role} type="button" onClick={() => void stage.addActor(role)}>
+            {SETUP_ROLE_OPTIONS.map((role) => (
+              <button
+                key={role}
+                type="button"
+                disabled={!isSetup}
+                onClick={() => void stage.addActor(role)}
+              >
                 Add {niceRole(role)}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => void stage.setControlMode(isSetup ? "system" : "setup")}
+            >
+              {isSetup ? "Hand Off To System" : "Return To Setup"}
+            </button>
           </div>
         </div>
         <label className="field field-wide">
@@ -228,7 +259,12 @@ function BuilderPanel({
         </div>
         <div className="card-grid">
           {actors.map((actor) => (
-            <ActorEditorCard key={actor.id} actor={actor} stage={stage} />
+            <ActorEditorCard
+              key={actor.id}
+              actor={actor}
+              stage={stage}
+              controlMode={controlMode}
+            />
           ))}
         </div>
       </section>
@@ -239,11 +275,13 @@ function BuilderPanel({
 interface ActorEditorCardProps {
   actor: ActorSheet;
   stage: Stage;
+  controlMode: ControlMode;
 }
 
-function ActorEditorCard({ actor, stage }: ActorEditorCardProps) {
+function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
   const actorFingerprint = JSON.stringify(actor);
   const [draft, setDraft] = useState<ActorSheet>(() => cloneActor(actor));
+  const editable = controlMode === "setup";
 
   useEffect(() => {
     setDraft(actorFromFingerprint(actorFingerprint));
@@ -270,25 +308,34 @@ function ActorEditorCard({ actor, stage }: ActorEditorCardProps) {
   }
 
   return (
-    <article className="actor-card">
+    <article className={`actor-card${editable ? "" : " is-locked"}`}>
       <div className="actor-card-top">
         <div>
           <p className="eyebrow">{niceRole(actor.role)}</p>
           <h3>{actor.name}</h3>
+          <p className="small-copy">Ref {actor.id}</p>
+          {!editable ? <p className="small-copy">System-managed during play.</p> : null}
         </div>
-        <div className="button-row">
-          <button type="button" onClick={() => void stage.saveActor(draft)}>
-            Save
-          </button>
-          <button type="button" onClick={() => void stage.duplicateActor(actor.id)}>
-            Duplicate
-          </button>
-          <button type="button" className="danger" onClick={() => void stage.removeActor(actor.id)}>
-            Remove
-          </button>
-        </div>
+        {editable ? (
+          <div className="button-row">
+            <button type="button" onClick={() => void stage.saveActor(draft)}>
+              Save
+            </button>
+            <button type="button" onClick={() => void stage.duplicateActor(actor.id)}>
+              Duplicate
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => void stage.removeActor(actor.id)}
+            >
+              Remove
+            </button>
+          </div>
+        ) : null}
       </div>
 
+      <fieldset className="actor-editor-fields" disabled={!editable}>
       <div className="field-grid">
         <label className="field">
           <span>Name</span>
@@ -532,20 +579,6 @@ function ActorEditorCard({ actor, stage }: ActorEditorCardProps) {
           Roll supply
         </button>
       </div>
-
-      <div className="status-strip">
-        <span className="status-label">Statuses</span>
-        {actor.statuses.length > 0 ? (
-          actor.statuses.map((status) => (
-            <span key={status} className="status-chip on">
-              {status}
-            </span>
-          ))
-        ) : (
-          <span className="status-empty">None tracked</span>
-        )}
-      </div>
-
       <label className="field field-wide">
         <span>Moves and spells</span>
         <textarea
@@ -570,23 +603,39 @@ function ActorEditorCard({ actor, stage }: ActorEditorCardProps) {
           onChange={(event) => updateField("notes", event.target.value)}
         />
       </label>
+      </fieldset>
+      <div className="status-strip">
+        <span className="status-label">Statuses</span>
+        {actor.statuses.length > 0 ? (
+          actor.statuses.map((status) => (
+            <span key={status} className="status-chip on">
+              {status}
+            </span>
+          ))
+        ) : (
+          <span className="status-empty">None tracked</span>
+        )}
+      </div>
     </article>
   );
 }
 
 interface EncounterPanelProps {
   stage: Stage;
+  controlMode: ControlMode;
   encounterNotesDraft: string;
   setEncounterNotesDraft: (value: string) => void;
 }
 
 function EncounterPanel({
   stage,
+  controlMode,
   encounterNotesDraft,
   setEncounterNotesDraft,
 }: EncounterPanelProps) {
   const chatState = stage.getChatState();
   const encounter = chatState.encounter;
+  const isSetup = controlMode === "setup";
 
   return (
     <div className="panel-stack">
@@ -657,7 +706,12 @@ function EncounterPanel({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Turn Order</p>
-            <h2>Manual control</h2>
+            <h2>{isSetup ? "Manual control" : "System-managed order"}</h2>
+            <p className="small-copy">
+              {isSetup
+                ? "You can still set initiative order by hand while building the encounter."
+                : "The model should now adjust roster order and active turns through hidden state patches. These controls stay locked."}
+            </p>
           </div>
         </div>
         <div className="encounter-list">
@@ -675,13 +729,25 @@ function EncounterPanel({
                     </p>
                   </div>
                   <div className="button-row">
-                    <button type="button" onClick={() => void stage.setActiveActor(actor.id)}>
+                    <button
+                      type="button"
+                      disabled={!isSetup}
+                      onClick={() => void stage.setActiveActor(actor.id)}
+                    >
                       Make active
                     </button>
-                    <button type="button" onClick={() => void stage.moveActor(actor.id, -1)}>
+                    <button
+                      type="button"
+                      disabled={!isSetup}
+                      onClick={() => void stage.moveActor(actor.id, -1)}
+                    >
                       Up
                     </button>
-                    <button type="button" onClick={() => void stage.moveActor(actor.id, 1)}>
+                    <button
+                      type="button"
+                      disabled={!isSetup}
+                      onClick={() => void stage.moveActor(actor.id, 1)}
+                    >
                       Down
                     </button>
                   </div>
@@ -878,22 +944,43 @@ interface DiceTrayProps {
 }
 
 function DiceTray({ stage }: DiceTrayProps) {
+  const [countDraft, setCountDraft] = useState("1");
+  const [sidesDraft, setSidesDraft] = useState("20");
+  const count = Math.max(1, Math.trunc(numberValue(countDraft) || 1));
+  const sides = Math.max(2, Math.trunc(numberValue(sidesDraft) || 20));
+
   return (
     <section className="panel compact-panel">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Dice Tray</p>
           <h2>Loose rolls</h2>
+          <p className="small-copy">Type the roll once instead of keeping a wall of preset buttons.</p>
         </div>
       </div>
+      <div className="dice-form">
+        <label className="field">
+          <span>Count</span>
+          <input
+            type="number"
+            min={1}
+            value={countDraft}
+            onChange={(event) => setCountDraft(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Sides</span>
+          <input
+            type="number"
+            min={2}
+            value={sidesDraft}
+            onChange={(event) => setSidesDraft(event.target.value)}
+          />
+        </label>
+      </div>
       <div className="button-row">
-        {[2, 4, 6, 8, 10, 12, 20].map((sides) => (
-          <button key={sides} type="button" onClick={() => void stage.rollLoose(1, sides)}>
-            d{sides}
-          </button>
-        ))}
-        <button type="button" onClick={() => void stage.rollLoose(2, 20)}>
-          2d20
+        <button type="button" onClick={() => void stage.rollLoose(count, sides)}>
+          Roll {count}d{sides}
         </button>
       </div>
     </section>
