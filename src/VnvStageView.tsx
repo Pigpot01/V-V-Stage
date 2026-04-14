@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { CSSProperties, useEffect, useRef, useState } from "react";
 import {
   ABILITY_RULES,
   ARMOUR_TABLE,
@@ -15,7 +15,15 @@ import {
 } from "./rules";
 import { describeArmour, describeAttack, formatSigned } from "./stageText";
 import type { Stage } from "./Stage";
-import { ActorRole, ActorSheet, ArmourType, ControlMode, InitiativeType, RollLogEntry } from "./types";
+import {
+  ActorController,
+  ActorRole,
+  ActorSheet,
+  ArmourType,
+  ControlMode,
+  InitiativeType,
+  RollLogEntry,
+} from "./types";
 
 type TabKey = "builder" | "encounter" | "reference";
 
@@ -65,6 +73,27 @@ function niceRole(role: ActorRole): string {
   }
 }
 
+function actorControllerLabel(controller: ActorController): string {
+  return controller === "system" ? "AI" : "Player";
+}
+
+function controllerForRole(
+  role: ActorRole,
+  current: ActorController,
+): ActorController {
+  if (role === "enemy") {
+    return "system";
+  }
+  if (role === "player") {
+    return "player";
+  }
+  return current === "system" ? "system" : "player";
+}
+
+function scalePercentLabel(uiScale: number): string {
+  return `${Math.round(uiScale * 100)}%`;
+}
+
 function tabLabel(tab: TabKey): string {
   switch (tab) {
     case "builder":
@@ -90,8 +119,10 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
   const chatState = stage.getChatState();
   const config = stage.getConfig();
   const uiError = stage.getUiError();
+  const uiScale = stage.getUiScale();
   const [campaignNotesDraft, setCampaignNotesDraft] = useState(chatState.campaignNotes);
   const [encounterNotesDraft, setEncounterNotesDraft] = useState(chatState.encounter.notes);
+  const scaleStyle = { "--ui-scale": uiScale } as CSSProperties;
 
   useEffect(() => stage.subscribe(() => setRevision((value) => value + 1)), [stage]);
   useEffect(() => setCampaignNotesDraft(chatState.campaignNotes), [chatState.campaignNotes]);
@@ -99,6 +130,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
 
   return (
     <div className="vnv-shell">
+      <div className="vnv-scale-shell" style={scaleStyle}>
       <header className="vnv-hero">
         <div>
           <p className="eyebrow">Vice & Violence Stage</p>
@@ -128,6 +160,20 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
           <div className="stat-chip">
             <span>Encounter</span>
             <strong>{chatState.encounter.active ? `Round ${chatState.encounter.round}` : "Idle"}</strong>
+          </div>
+          <div className="scale-card">
+            <span>UI scale</span>
+            <div className="scale-row">
+              <input
+                type="range"
+                min={0.75}
+                max={1.3}
+                step={0.05}
+                value={uiScale}
+                onChange={(event) => stage.setUiScale(Number(event.target.value))}
+              />
+              <strong>{scalePercentLabel(uiScale)}</strong>
+            </div>
           </div>
         </div>
       </header>
@@ -182,6 +228,7 @@ export function VnvStageView({ stage }: VnvStageViewProps) {
           <PromptPreview preview={stage.previewStageDirections()} />
         </aside>
       </div>
+      </div>
     </div>
   );
 }
@@ -202,6 +249,7 @@ function BuilderPanel({
   setCampaignNotesDraft,
 }: BuilderPanelProps) {
   const isSetup = controlMode === "setup";
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <div className="panel-stack">
@@ -212,8 +260,8 @@ function BuilderPanel({
             <h2>Roster and notes</h2>
             <p className="small-copy">
               {isSetup
-                ? "Add player characters, allies, and NPCs here. Once play begins, hand the roster to the system."
-                : "Roster edits are locked. The model now owns enemy creation, roster changes, and turn-order reshuffling."}
+                ? "Add player characters, allies, and NPCs here. Import character files, then hand the roster to the system when play begins."
+                : "Roster edits are locked. The model now owns enemy creation, roster changes, and turn-order reshuffling. Browser backup stays active across refreshes."}
             </p>
           </div>
           <div className="button-row">
@@ -229,12 +277,36 @@ function BuilderPanel({
             ))}
             <button
               type="button"
+              disabled={!isSetup}
+              onClick={() => importInputRef.current?.click()}
+            >
+              Import Character File
+            </button>
+            <button type="button" onClick={() => stage.exportRoster()}>
+              Save Roster File
+            </button>
+            <button
+              type="button"
               onClick={() => void stage.setControlMode(isSetup ? "system" : "setup")}
             >
               {isSetup ? "Hand Off To System" : "Return To Setup"}
             </button>
           </div>
         </div>
+        <input
+          ref={importInputRef}
+          type="file"
+          className="sr-only"
+          accept=".json,application/json"
+          multiple
+          onChange={(event) => {
+            const files = event.target.files;
+            if (files != null && files.length > 0) {
+              void stage.importCharacterFiles(files);
+            }
+            event.target.value = "";
+          }}
+        />
         <label className="field field-wide">
           <span>Campaign notes</span>
           <textarea
@@ -282,6 +354,7 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
   const actorFingerprint = JSON.stringify(actor);
   const [draft, setDraft] = useState<ActorSheet>(() => cloneActor(actor));
   const editable = controlMode === "setup";
+  const controllerEditable = draft.role === "ally" || draft.role === "npc";
 
   useEffect(() => {
     setDraft(actorFromFingerprint(actorFingerprint));
@@ -314,15 +387,23 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           <p className="eyebrow">{niceRole(actor.role)}</p>
           <h3>{actor.name}</h3>
           <p className="small-copy">Ref {actor.id}</p>
+          <p className="small-copy">{actorControllerLabel(actor.controller)} controls this actor.</p>
           {!editable ? <p className="small-copy">System-managed during play.</p> : null}
         </div>
-        {editable ? (
-          <div className="button-row">
+        <div className="button-row">
+          <button type="button" onClick={() => stage.exportActorSheet(draft)}>
+            Save file
+          </button>
+          {editable ? (
+            <>
             <button type="button" onClick={() => void stage.saveActor(draft)}>
               Save
             </button>
             <button type="button" onClick={() => void stage.duplicateActor(actor.id)}>
               Duplicate
+            </button>
+            <button type="button" onClick={() => void stage.resetActorSheet(actor.id)}>
+              Reset sheet
             </button>
             <button
               type="button"
@@ -331,8 +412,9 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
             >
               Remove
             </button>
-          </div>
-        ) : null}
+            </>
+          ) : null}
+        </div>
       </div>
 
       <fieldset className="actor-editor-fields" disabled={!editable}>
@@ -345,7 +427,14 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           <span>Role</span>
           <select
             value={draft.role}
-            onChange={(event) => updateField("role", event.target.value as ActorRole)}
+            onChange={(event) => {
+              const role = event.target.value as ActorRole;
+              setDraft((current) => ({
+                ...current,
+                role,
+                controller: controllerForRole(role, current.controller),
+              }));
+            }}
           >
             {ROLE_OPTIONS.map((role) => (
               <option key={role} value={role}>
@@ -354,6 +443,31 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
             ))}
           </select>
         </label>
+        <div className="field">
+          <span>AI controls this actor</span>
+          {controllerEditable ? (
+            <div className="segmented-control">
+              <button
+                type="button"
+                className={draft.controller === "player" ? "is-active" : ""}
+                onClick={() => updateField("controller", "player")}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                className={draft.controller === "system" ? "is-active" : ""}
+                onClick={() => updateField("controller", "system")}
+              >
+                Yes
+              </button>
+            </div>
+          ) : (
+            <div className="readout">
+              {draft.role === "enemy" ? "Yes" : "No"}
+            </div>
+          )}
+        </div>
         <label className="field">
           <span>Kin</span>
           <input value={draft.kin} onChange={(event) => updateField("kin", event.target.value)} />
@@ -563,6 +677,9 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
       </div>
 
       <div className="button-row">
+        <button type="button" onClick={() => void stage.rollActorFullBuild(actor.id)}>
+          Roll full build
+        </button>
         <button type="button" onClick={() => void stage.rollActorAbilities(actor.id)}>
           Roll abilities
         </button>
@@ -579,6 +696,10 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           Roll supply
         </button>
       </div>
+      <p className="small-copy">
+        Full build resets the random sheet fields before rerolling them. Supply rerolls replace the old
+        supply block instead of stacking it.
+      </p>
       <label className="field field-wide">
         <span>Moves and spells</span>
         <textarea
@@ -593,6 +714,14 @@ function ActorEditorCard({ actor, stage, controlMode }: ActorEditorCardProps) {
           rows={4}
           value={draft.inventoryText}
           onChange={(event) => updateField("inventoryText", event.target.value)}
+        />
+      </label>
+      <label className="field field-wide">
+        <span>Long backstory (optional)</span>
+        <textarea
+          rows={7}
+          value={draft.backstory}
+          onChange={(event) => updateField("backstory", event.target.value)}
         />
       </label>
       <label className="field field-wide">
@@ -724,7 +853,7 @@ function EncounterPanel({
                     <p className="eyebrow">{actor.initiative}</p>
                     <h3>{actor.name}</h3>
                     <p className="small-copy">
-                      {niceRole(actor.role)} | {actor.className} | Life {actor.lifeCurrent}/
+                      {niceRole(actor.role)} | {actorControllerLabel(actor.controller)} control | {actor.className} | Life {actor.lifeCurrent}/
                       {actor.lifeMax}
                     </p>
                   </div>

@@ -99,10 +99,81 @@ textarea {
 
 .vnv-shell {
   min-height: 100%;
+  overflow: auto;
   padding: 20px;
+  flex-direction: column;
+}
+
+.vnv-scale-shell {
+  --ui-scale: 1;
+  min-height: calc(100% / var(--ui-scale));
+  width: calc(100% / var(--ui-scale));
   display: flex;
   flex-direction: column;
   gap: 16px;
+  transform: scale(var(--ui-scale));
+  transform-origin: top left;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.scale-card {
+  min-width: 220px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(76, 31, 31, 0.15);
+  background: rgba(255, 250, 239, 0.72);
+}
+
+.scale-card span {
+  display: block;
+  margin-bottom: 6px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+
+.scale-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.scale-row input[type="range"] {
+  flex: 1;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.segmented-control button {
+  width: 100%;
+}
+
+.segmented-control button.is-active {
+  background: linear-gradient(180deg, rgba(176, 72, 57, 0.98), rgba(116, 31, 29, 0.98));
+}
+
+.segmented-control button:disabled {
+  opacity: 0.72;
+}
+
+.vnv-shell,
+.vnv-scale-shell {
+  display: flex;
 }
 
 .vnv-hero,

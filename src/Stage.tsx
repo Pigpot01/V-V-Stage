@@ -20,6 +20,7 @@ import { createActor, createDefaultState } from "./sampleState";
 import { buildStageDirections, formatSigned, ResolvedStageConfig } from "./stageText";
 import {
   ActorAbilities,
+  ActorController,
   ActorRole,
   ActorSheet,
   ControlMode,
@@ -35,13 +36,22 @@ type UpdateListener = () => void;
 type TrackableResource = "spellUses" | "exertion" | "disposition";
 type SurpriseType = EncounterState["surprise"];
 
+interface LocalStageCache {
+  version: number;
+  savedAt: number;
+  chatState: StageChatState;
+  uiScale: number;
+}
+
 interface AutomationActorPatch {
   id?: string;
   role?: ActorRole;
+  controller?: ActorController;
   name?: string;
   kin?: string;
   className?: string;
   background?: string;
+  backstory?: string;
   birthsign?: string;
   boon?: string;
   level?: number;
@@ -80,9 +90,14 @@ const DEFAULT_CONFIG: ResolvedStageConfig = {
   lewdLevel: "LL2",
 };
 
+const LOCAL_CACHE_VERSION = 1;
+const DEFAULT_UI_SCALE = 1;
+const MIN_UI_SCALE = 0.75;
+const MAX_UI_SCALE = 1.3;
 const MAX_ROLL_LOG = 24;
 const STATE_BLOCK_PATTERN = /<<VNV_STATE>>\s*([\s\S]*?)\s*<<\/VNV_STATE>>/m;
 const ACTOR_ROLES: ActorRole[] = ["player", "ally", "enemy", "npc"];
+const ACTOR_CONTROLLERS: ActorController[] = ["player", "system"];
 const INITIATIVE_TYPES: ActorSheet["initiative"][] = [
   "manual",
   "preemptive",
@@ -97,16 +112,34 @@ function makeId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function normaliseText(value: string): string {
-  return value.replace(/\r/g, "").trim();
+function normaliseText(value: string | null | undefined): string {
+  return typeof value === "string" ? value.replace(/\r/g, "").trim() : "";
 }
 
 function normaliseId(value: string): string {
   return normaliseText(value).replace(/\s+/g, "-");
 }
 
+function normaliseActorController(
+  role: ActorRole,
+  controller: ActorController | undefined,
+): ActorController {
+  if (role === "enemy") {
+    return "system";
+  }
+  if (role === "player") {
+    return "player";
+  }
+  return controller === "system" ? "system" : "player";
+}
+
 function normaliseControlMode(value: ControlMode | undefined): ControlMode {
   return value === "system" ? "system" : "setup";
+}
+
+function normaliseUiScale(value: number | undefined): number {
+  const fallback = value ?? DEFAULT_UI_SCALE;
+  return clamp(Math.round(fallback * 100) / 100, MIN_UI_SCALE, MAX_UI_SCALE);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,6 +171,12 @@ function readStringArray(value: unknown): string[] | undefined {
 function readActorRole(value: unknown): ActorRole | undefined {
   return typeof value === "string" && ACTOR_ROLES.includes(value as ActorRole)
     ? (value as ActorRole)
+    : undefined;
+}
+
+function readActorController(value: unknown): ActorController | undefined {
+  return typeof value === "string" && ACTOR_CONTROLLERS.includes(value as ActorController)
+    ? (value as ActorController)
     : undefined;
 }
 
@@ -236,6 +275,7 @@ function sanitiseAutomationActorPatch(value: unknown): AutomationActorPatch | nu
   const patch: AutomationActorPatch = {};
   const id = readString(value.id);
   const role = readActorRole(value.role);
+  const controller = readActorController(value.controller);
   const initiative = readInitiative(value.initiative);
   const armourType = readArmourType(value.armourType);
   const statuses = readStringArray(value.statuses);
@@ -245,6 +285,9 @@ function sanitiseAutomationActorPatch(value: unknown): AutomationActorPatch | nu
   }
   if (role !== undefined) {
     patch.role = role;
+  }
+  if (controller !== undefined) {
+    patch.controller = controller;
   }
   if (initiative !== undefined) {
     patch.initiative = initiative;
@@ -260,6 +303,7 @@ function sanitiseAutomationActorPatch(value: unknown): AutomationActorPatch | nu
   const kin = readString(value.kin);
   const className = readString(value.className);
   const background = readString(value.background);
+  const backstory = readString(value.backstory);
   const birthsign = readString(value.birthsign);
   const boon = readString(value.boon);
   const weaponName = readString(value.weaponName);
@@ -282,6 +326,7 @@ function sanitiseAutomationActorPatch(value: unknown): AutomationActorPatch | nu
   if (kin !== undefined) patch.kin = kin;
   if (className !== undefined) patch.className = className;
   if (background !== undefined) patch.background = background;
+  if (backstory !== undefined) patch.backstory = backstory;
   if (birthsign !== undefined) patch.birthsign = birthsign;
   if (boon !== undefined) patch.boon = boon;
   if (weaponName !== undefined) patch.weaponName = weaponName;
@@ -383,6 +428,137 @@ function defaultNameForRole(role: ActorRole): string {
   }
 }
 
+function safeFilenameSegment(value: string): string {
+  const normalised = normaliseId(value).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  return normalised.replace(/-+/g, "-").replace(/^-|-$/g, "") || "character";
+}
+
+function createActorResetSheet(actor: ActorSheet): ActorSheet {
+  const base = createActor(actor.role);
+  return normaliseActor({
+    ...base,
+    id: actor.id,
+    name: actor.name,
+    role: actor.role,
+    controller: actor.controller,
+    kin: actor.kin,
+    className: actor.className,
+    background: actor.background,
+    backstory: actor.backstory,
+    level: actor.level,
+    notes: actor.notes,
+  });
+}
+
+function buildActorExportPayload(actor: ActorSheet): Record<string, unknown> {
+  return {
+    format: "vnv-actor",
+    exportedAt: new Date().toISOString(),
+    actor,
+  };
+}
+
+function buildRosterExportPayload(state: StageChatState): Record<string, unknown> {
+  return {
+    format: "vnv-roster",
+    exportedAt: new Date().toISOString(),
+    actors: state.actors,
+    campaignNotes: state.campaignNotes,
+  };
+}
+
+function downloadJson(filename: string, payload: unknown): void {
+  if (typeof document === "undefined" || typeof URL === "undefined") {
+    return;
+  }
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function resolvePersistenceKey(): string {
+  if (typeof window === "undefined") {
+    return "vnv-stage:default";
+  }
+  const route = `${window.location.pathname}${window.location.search}` || "default";
+  return `vnv-stage:${route}`;
+}
+
+function readLocalCache(persistenceKey: string): LocalStageCache | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(persistenceKey);
+    if (raw == null) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed) || !isRecord(parsed.chatState)) {
+      return null;
+    }
+    return {
+      version: LOCAL_CACHE_VERSION,
+      savedAt: readNumber(parsed.savedAt) ?? Date.now(),
+      chatState: normaliseState(parsed.chatState as unknown as StageChatState),
+      uiScale: normaliseUiScale(readNumber(parsed.uiScale)),
+    };
+  } catch (error) {
+    void error;
+    return null;
+  }
+}
+
+function makeUniqueActorId(baseId: string, role: ActorRole, usedIds: Set<string>): string {
+  const initialId = normaliseId(baseId) || makeId(role);
+  if (!usedIds.has(initialId)) {
+    usedIds.add(initialId);
+    return initialId;
+  }
+
+  let counter = 2;
+  while (usedIds.has(`${initialId}-${counter}`)) {
+    counter += 1;
+  }
+  const uniqueId = `${initialId}-${counter}`;
+  usedIds.add(uniqueId);
+  return uniqueId;
+}
+
+function coerceImportedActors(value: unknown): ActorSheet[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => sanitiseAutomationActorPatch(entry))
+      .filter((entry): entry is AutomationActorPatch => entry != null)
+      .map((entry) => mergeActorPatch(undefined, entry));
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value.actors)) {
+    return coerceImportedActors(value.actors);
+  }
+
+  if (isRecord(value.actor)) {
+    return coerceImportedActors([value.actor]);
+  }
+
+  const patch = sanitiseAutomationActorPatch(value);
+  return patch == null ? [] : [mergeActorPatch(undefined, patch)];
+}
+
 function clampMax(current: number, max: number): number {
   return clamp(current, 0, max);
 }
@@ -392,13 +568,16 @@ function normaliseActor(actor: ActorSheet): ActorSheet {
   const lifeMax = Math.max(0, Math.trunc(actor.lifeMax));
   const spellUsesMax = Math.max(0, Math.trunc(actor.spellUsesMax));
   const exertionMax = Math.max(0, Math.trunc(actor.exertionMax));
+  const controller = normaliseActorController(actor.role, actor.controller);
   return {
     ...actor,
     id: normaliseId(actor.id) || makeId(actor.role),
     name: normaliseText(actor.name) || defaultNameForRole(actor.role),
+    controller,
     kin: normaliseText(actor.kin),
     className: normaliseText(actor.className),
     background: normaliseText(actor.background),
+    backstory: normaliseText(actor.backstory),
     birthsign: normaliseText(actor.birthsign),
     boon: normaliseText(actor.boon),
     level,
@@ -474,13 +653,41 @@ function normaliseEncounter(
 function normaliseState(state: StageChatState): StageChatState {
   const actors = state.actors.map((actor) => normaliseActor(actor));
   return {
-    version: 2,
+    version: 3,
     controlMode: normaliseControlMode(state.controlMode),
     actors,
     encounter: normaliseEncounter(state.encounter, actors),
     rollLog: state.rollLog.slice(0, MAX_ROLL_LOG),
     campaignNotes: normaliseText(state.campaignNotes),
   };
+}
+
+const DEFAULT_STATE_SNAPSHOT = JSON.stringify(normaliseState(createDefaultState()));
+
+function isDefaultState(state: StageChatState): boolean {
+  return JSON.stringify(normaliseState(state)) === DEFAULT_STATE_SNAPSHOT;
+}
+
+function chooseInitialChatState(
+  incomingState: StageChatState | null | undefined,
+  cachedState: StageChatState | null,
+): StageChatState {
+  if (incomingState == null) {
+    return cachedState ?? createDefaultState();
+  }
+
+  const normalisedIncoming = normaliseState(incomingState);
+  if (cachedState == null) {
+    return normalisedIncoming;
+  }
+
+  if (JSON.stringify(normalisedIncoming) === JSON.stringify(cachedState)) {
+    return normalisedIncoming;
+  }
+
+  return isDefaultState(normalisedIncoming) && !isDefaultState(cachedState)
+    ? cachedState
+    : normalisedIncoming;
 }
 
 function mergeActorPatch(
@@ -579,17 +786,25 @@ export class Stage extends StageBase<
   private messageStateData: StageMessageState;
   private readonly configData: ResolvedStageConfig;
   private readonly listeners: Set<UpdateListener>;
+  private readonly persistenceKey: string;
   private uiError: string | null;
+  private uiScaleData: number;
 
   constructor(
     data: InitialData<null, StageChatState, StageMessageState, StageConfig>,
   ) {
     super(data);
-    this.chatStateData = normaliseState(data.chatState ?? createDefaultState());
+    this.persistenceKey = resolvePersistenceKey();
+    const localCache = readLocalCache(this.persistenceKey);
+    this.chatStateData = chooseInitialChatState(
+      data.chatState,
+      localCache?.chatState ?? null,
+    );
     this.messageStateData = data.messageState ?? { lastInjectedSummary: null };
     this.configData = { ...DEFAULT_CONFIG, ...(data.config ?? {}) };
     this.listeners = new Set();
     this.uiError = null;
+    this.uiScaleData = normaliseUiScale(localCache?.uiScale);
   }
 
   async load(): Promise<
@@ -668,8 +883,18 @@ export class Stage extends StageBase<
     return this.uiError;
   }
 
+  getUiScale(): number {
+    return this.uiScaleData;
+  }
+
   clearUiError(): void {
     this.uiError = null;
+    this.emit();
+  }
+
+  setUiScale(uiScale: number): void {
+    this.uiScaleData = normaliseUiScale(uiScale);
+    this.persistLocalCache(this.chatStateData);
     this.emit();
   }
 
@@ -685,6 +910,71 @@ export class Stage extends StageBase<
       ...state,
       controlMode,
     }));
+  }
+
+  exportActorSheet(actor: ActorSheet): void {
+    downloadJson(
+      `${safeFilenameSegment(actor.name || actor.id)}.vnv-character.json`,
+      buildActorExportPayload(normaliseActor(actor)),
+    );
+  }
+
+  exportActor(actorId: string): void {
+    const actor = this.chatStateData.actors.find((entry) => entry.id === actorId);
+    if (actor == null) {
+      return;
+    }
+    this.exportActorSheet(actor);
+  }
+
+  exportRoster(): void {
+    downloadJson("vnv-roster.json", buildRosterExportPayload(this.chatStateData));
+  }
+
+  async importCharacterFiles(files: FileList | File[]): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      this.setUiErrorMessage("Return to setup mode before importing character files.");
+      return;
+    }
+
+    const fileList = Array.from(files);
+    if (fileList.length === 0) {
+      return;
+    }
+
+    try {
+      const importedActors: ActorSheet[] = [];
+      for (const file of fileList) {
+        const contents = await file.text();
+        const parsed = JSON.parse(contents);
+        const actors = coerceImportedActors(parsed);
+        if (actors.length === 0) {
+          throw new Error(`No actors found in ${file.name}.`);
+        }
+        importedActors.push(...actors);
+      }
+
+      await this.mutateState((state) => {
+        const usedIds = new Set(state.actors.map((actor) => actor.id));
+        const actors = [...state.actors];
+        importedActors.forEach((actor) => {
+          actors.push(
+            normaliseActor({
+              ...actor,
+              id: makeUniqueActorId(actor.id, actor.role, usedIds),
+            }),
+          );
+        });
+        return normaliseState({
+          ...state,
+          actors,
+        });
+      });
+    } catch (error) {
+      this.setUiErrorMessage(
+        error instanceof Error ? error.message : "Failed to import character file.",
+      );
+    }
   }
 
   async saveActor(actor: ActorSheet): Promise<void> {
@@ -861,6 +1151,19 @@ export class Stage extends StageBase<
     );
   }
 
+  async resetActorSheet(actorId: string): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
+
+    await this.mutateState((state) => ({
+      ...state,
+      actors: state.actors.map((actor) =>
+        actor.id === actorId ? createActorResetSheet(actor) : actor,
+      ),
+    }));
+  }
+
   async toggleStatus(actorId: string, status: string): Promise<void> {
     await this.mutateState((state) => ({
       ...state,
@@ -943,6 +1246,46 @@ export class Stage extends StageBase<
     await this.appendRoll(prefix, `${dice.join(", ")} = ${total}`);
   }
 
+  async rollActorFullBuild(actorId: string): Promise<void> {
+    if (this.chatStateData.controlMode !== "setup") {
+      return;
+    }
+    const abilities = rollAbilityBlock();
+    const weapon = rollWeaponLoadout();
+    const armour = rollArmourLoadout();
+    const birthsign = rollBirthsign();
+    const supply = rollSupplySnippet();
+    const detail = [
+      `Abilities Smarts ${formatSigned(abilities.smarts)}, Brawn ${formatSigned(abilities.brawn)}, Moxie ${formatSigned(abilities.moxie)}, Hotness ${formatSigned(abilities.hotness)}`,
+      `Weapon ${weapon.materialLabel} ${weapon.weaponName} ${weapon.weaponDie}`,
+      `Armour ${armour.armourType} ${armour.armourSaveDie}`,
+      `Birthsign ${birthsign.sign}`,
+      `Supply ${supply}`,
+    ].join(" | ");
+
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) => {
+        if (actor.id !== actorId) {
+          return actor;
+        }
+        const resetActor = createActorResetSheet(actor);
+        return normaliseActor({
+          ...resetActor,
+          abilities,
+          weaponName: weapon.weaponName,
+          weaponDie: weapon.weaponDie,
+          weaponMaterial: weapon.materialBonus,
+          armourType: armour.armourType,
+          armourSaveDie: armour.armourSaveDie,
+          birthsign: birthsign.sign,
+          boon: birthsign.boon,
+          inventoryText: supply,
+        });
+      });
+      return pushRoll({ ...state, actors }, "Full Build Roll", detail);
+    });
+  }
+
   async rollActorAbilities(actorId: string): Promise<void> {
     const abilities = rollAbilityBlock();
     const detail = `Smarts ${formatSigned(abilities.smarts)}, Brawn ${formatSigned(abilities.brawn)}, Moxie ${formatSigned(abilities.moxie)}, Hotness ${formatSigned(abilities.hotness)}`;
@@ -1019,13 +1362,9 @@ export class Stage extends StageBase<
         if (actor.id !== actorId) {
           return actor;
         }
-        const inventoryText =
-          actor.inventoryText.trim() === ""
-            ? supply
-            : `${actor.inventoryText}\n${supply}`;
         return {
           ...actor,
-          inventoryText,
+          inventoryText: supply,
         };
       });
       return pushRoll({ ...state, actors }, "Supply Roll", supply);
@@ -1049,6 +1388,7 @@ export class Stage extends StageBase<
   ): Promise<void> {
     const nextState = normaliseState(mutator(this.chatStateData));
     this.chatStateData = nextState;
+    this.persistLocalCache(nextState);
     this.emit();
     await this.persistChatState(nextState);
   }
@@ -1064,6 +1404,29 @@ export class Stage extends StageBase<
       this.uiError =
         error instanceof Error ? error.message : "Failed to persist chat state.";
       this.emit();
+    }
+  }
+
+  private setUiErrorMessage(message: string | null): void {
+    this.uiError = message;
+    this.emit();
+  }
+
+  private persistLocalCache(chatState: StageChatState): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const cache: LocalStageCache = {
+        version: LOCAL_CACHE_VERSION,
+        savedAt: Date.now(),
+        chatState,
+        uiScale: this.uiScaleData,
+      };
+      window.localStorage.setItem(this.persistenceKey, JSON.stringify(cache));
+    } catch (error) {
+      void error;
     }
   }
 }

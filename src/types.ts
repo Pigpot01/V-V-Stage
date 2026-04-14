@@ -1,6 +1,7 @@
 export type AbilityKey = "smarts" | "brawn" | "moxie" | "hotness";
 
 export type ActorRole = "player" | "ally" | "enemy" | "npc";
+export type ActorController = "player" | "system";
 
 export type ArmourType = "skimpy" | "light" | "medium" | "full";
 
@@ -25,9 +26,11 @@ export interface ActorSheet {
   id: string;
   name: string;
   role: ActorRole;
+  controller: ActorController;
   kin: string;
   className: string;
   background: string;
+  backstory: string;
   birthsign: string;
   boon: string;
   level: number;

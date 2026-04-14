@@ -29,9 +29,11 @@ export function createActor(role: ActorRole = "player"): ActorSheet {
     id: makeId(role),
     name: role === "enemy" ? "Enemy" : "Adventurer",
     role,
+    controller: role === "enemy" ? "system" : "player",
     kin: role === "enemy" ? "Monster / Humanoid" : "Human",
     className: role === "enemy" ? "Threat" : "Aspiring Adventurer",
     background: "",
+    backstory: "",
     birthsign: "",
     boon: "",
     level: 0,
@@ -68,6 +70,8 @@ export function createDefaultState(): StageChatState {
   hero.kin = "Dweller";
   hero.className = "Would-Be Bard";
   hero.background = "Courier";
+  hero.backstory =
+    "A restless courier who kept copying songs and rumors into the margins of every parcel ledger until one day he decided to become the story instead.";
   hero.birthsign = "Ran'di";
   hero.boon = "Roll a Light Magic spell";
   hero.lifeCurrent = 14;
@@ -84,7 +88,7 @@ export function createDefaultState(): StageChatState {
   hero.inventoryText = "Lantern and oil\nA pair of reading glasses";
 
   return {
-    version: 2,
+    version: 3,
     controlMode: "setup",
     actors: [hero],
     encounter: {

@@ -20,7 +20,7 @@ export function describeArmour(actor: ActorSheet): string {
 }
 
 function formatRole(actor: ActorSheet): string {
-  return `${actor.role.toUpperCase()} | ${actor.kin} | ${actor.className} | level ${actor.level}`;
+  return `${actor.role.toUpperCase()} | ${actor.controller === "system" ? "system-controlled" : "player-controlled"} | ${actor.kin} | ${actor.className} | level ${actor.level}`;
 }
 
 function formatResources(actor: ActorSheet): string {
@@ -34,7 +34,10 @@ function formatAbilities(actor: ActorSheet): string {
 function compactActorLine(actor: ActorSheet): string {
   const statuses = actor.statuses.length > 0 ? ` | Statuses: ${actor.statuses.join(", ")}` : "";
   const sign = actor.birthsign !== "" ? ` | Birthsign: ${actor.birthsign}` : "";
-  return `[${actor.id}] ${actor.name}: ${formatRole(actor)} | ${formatResources(actor)} | ${formatAbilities(actor)} | Attack ${describeAttack(actor)} | ${describeArmour(actor)}${sign}${statuses}`;
+  const backstory = actor.backstory.trim() !== ""
+    ? ` | Backstory: ${actor.backstory.trim().replace(/\n+/g, " | ")}`
+    : "";
+  return `[${actor.id}] ${actor.name}: ${formatRole(actor)} | ${formatResources(actor)} | ${formatAbilities(actor)} | Attack ${describeAttack(actor)} | ${describeArmour(actor)}${sign}${statuses}${backstory}`;
 }
 
 function fullActorBlock(actor: ActorSheet): string {
@@ -49,6 +52,7 @@ function fullActorBlock(actor: ActorSheet): string {
     actor.birthsign !== "" ? `Birthsign: ${actor.birthsign}` : "",
     actor.boon !== "" ? `Boon: ${actor.boon}` : "",
     actor.background !== "" ? `Background: ${actor.background}` : "",
+    actor.backstory.trim() !== "" ? `Backstory: ${actor.backstory.trim().replace(/\n+/g, " | ")}` : "",
     actor.movesText.trim() !== "" ? `Moves and Spells: ${actor.movesText.trim().replace(/\n+/g, " | ")}` : "",
     actor.inventoryText.trim() !== "" ? `Inventory: ${actor.inventoryText.trim().replace(/\n+/g, " | ")}` : "",
     actor.notes.trim() !== "" ? `Notes: ${actor.notes.trim().replace(/\n+/g, " | ")}` : "",
@@ -100,6 +104,7 @@ export function buildStageDirections(
           '{"upsertActors":[{"id":"enemy-bandit-1","role":"enemy","name":"Bandit"}],"removeActorIds":[],"actorOrder":["player-main","enemy-bandit-1"],"encounter":{"active":true,"round":1,"activeActorId":"player-main","surprise":"none"},"rolls":[{"label":"Bandit attack","detail":"d8 + material 1 + Brawn 1 = 7"}]}',
           "<</VNV_STATE>>",
           "Use valid JSON only. Omit keys that did not change. Actor ids in brackets are the refs to update. For actors, `statuses` replaces the full status list and `abilities` may contain only the changed ability scores.",
+          "Only choose actions for enemies and for allies or NPCs marked as system-controlled. Treat player-controlled allies and NPCs like player characters: you may report consequences that happen to them, but do not volunteer their decisions without user input.",
         ].join("\n"),
   );
   sections.push(`Campaign notes: ${state.campaignNotes.trim() !== "" ? state.campaignNotes.trim().replace(/\n+/g, " | ") : "None."}`);
