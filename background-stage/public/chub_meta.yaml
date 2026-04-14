@@ -26,3 +26,6 @@ config_schema:
     compactPromptSummary:
       type: boolean
       default: true
+
+extension_id: 'v-v-stage-background-063ddffe4934'
+
