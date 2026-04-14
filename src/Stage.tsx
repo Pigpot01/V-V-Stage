@@ -1,205 +1,629 @@
-import {ReactElement} from "react";
-import {StageBase, StageResponse, InitialData, Message} from "@chub-ai/stages-ts";
-import {LoadResponse} from "@chub-ai/stages-ts/dist/types/load";
+import { ReactElement } from "react";
+import {
+  InitialData,
+  Message,
+  StageBase,
+  StageResponse,
+} from "@chub-ai/stages-ts";
+import { LoadResponse } from "@chub-ai/stages-ts/dist/types/load";
+import {
+  ARMOUR_TABLE,
+  clamp,
+  rollAbilityBlock,
+  rollArmourLoadout,
+  rollBirthsign,
+  rollDice,
+  rollSupplySnippet,
+  rollWeaponLoadout,
+} from "./rules";
+import { createActor, createDefaultState } from "./sampleState";
+import { buildStageDirections, formatSigned, ResolvedStageConfig } from "./stageText";
+import {
+  ActorRole,
+  ActorSheet,
+  EncounterState,
+  RollLogEntry,
+  StageChatState,
+  StageConfig,
+  StageMessageState,
+} from "./types";
+import { VnvStageView } from "./VnvStageView";
 
-/***
- The type that this stage persists message-level state in.
- This is primarily for readability, and not enforced.
+type UpdateListener = () => void;
+type TrackableResource = "spellUses" | "exertion" | "disposition";
 
- @description This type is saved in the database after each message,
-  which makes it ideal for storing things like positions and statuses,
-  but not for things like history, which is best managed ephemerally
-  in the internal state of the Stage class itself.
- ***/
-type MessageStateType = any;
+const DEFAULT_CONFIG: ResolvedStageConfig = {
+  includeStageDirections: true,
+  compactPromptSummary: true,
+  lewdLevel: "LL2",
+};
 
-/***
- The type of the stage-specific configuration of this stage.
+const MAX_ROLL_LOG = 24;
 
- @description This is for things you want people to be able to configure,
-  like background color.
- ***/
-type ConfigType = any;
+function makeId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
-/***
- The type that this stage persists chat initialization state in.
- If there is any 'constant once initialized' static state unique to a chat,
- like procedurally generated terrain that is only created ONCE and ONLY ONCE per chat,
- it belongs here.
- ***/
-type InitStateType = any;
+function normaliseText(value: string): string {
+  return value.replace(/\r/g, "").trim();
+}
 
-/***
- The type that this stage persists dynamic chat-level state in.
- This is for any state information unique to a chat,
-    that applies to ALL branches and paths such as clearing fog-of-war.
- It is usually unlikely you will need this, and if it is used for message-level
-    data like player health then it will enter an inconsistent state whenever
-    they change branches or jump nodes. Use MessageStateType for that.
- ***/
-type ChatStateType = any;
+function armourSaveForType(armourType: ActorSheet["armourType"]): string {
+  return ARMOUR_TABLE.find((entry) => entry.armourType === armourType)?.armourSaveDie ?? "d4";
+}
 
-/***
- A simple example class that implements the interfaces necessary for a Stage.
- If you want to rename it, be sure to modify App.js as well.
- @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/stage.ts
- ***/
-export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateType, ConfigType> {
+function defaultNameForRole(role: ActorRole): string {
+  switch (role) {
+    case "ally":
+      return "Ally";
+    case "enemy":
+      return "Enemy";
+    case "npc":
+      return "NPC";
+    case "player":
+    default:
+      return "Adventurer";
+  }
+}
 
-    /***
-     A very simple example internal state. Can be anything.
-     This is ephemeral in the sense that it isn't persisted to a database,
-     but exists as long as the instance does, i.e., the chat page is open.
-     ***/
-    myInternalState: {[key: string]: any};
+function clampMax(current: number, max: number): number {
+  return clamp(current, 0, max);
+}
 
-    constructor(data: InitialData<InitStateType, ChatStateType, MessageStateType, ConfigType>) {
-        /***
-         This is the first thing called in the stage,
-         to create an instance of it.
-         The definition of InitialData is at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/initial.ts
-         Character at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/character.ts
-         User at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/user.ts
-         ***/
-        super(data);
-        const {
-            characters,         // @type:  { [key: string]: Character }
-            users,                  // @type:  { [key: string]: User}
-            config,                                 //  @type:  ConfigType
-            messageState,                           //  @type:  MessageStateType
-            environment,                     // @type: Environment (which is a string)
-            initState,                             // @type: null | InitStateType
-            chatState                              // @type: null | ChatStateType
-        } = data;
-        this.myInternalState = messageState != null ? messageState : {'someKey': 'someValue'};
-        this.myInternalState['numUsers'] = Object.keys(users).length;
-        this.myInternalState['numChars'] = Object.keys(characters).length;
+function normaliseActor(actor: ActorSheet): ActorSheet {
+  const level = Math.max(0, Math.trunc(actor.level));
+  const lifeMax = Math.max(0, Math.trunc(actor.lifeMax));
+  const spellUsesMax = Math.max(0, Math.trunc(actor.spellUsesMax));
+  const exertionMax = Math.max(0, Math.trunc(actor.exertionMax));
+  return {
+    ...actor,
+    id: actor.id || makeId(actor.role),
+    name: normaliseText(actor.name) || defaultNameForRole(actor.role),
+    kin: normaliseText(actor.kin),
+    className: normaliseText(actor.className),
+    background: normaliseText(actor.background),
+    birthsign: normaliseText(actor.birthsign),
+    boon: normaliseText(actor.boon),
+    level,
+    lifeMax,
+    lifeCurrent: clampMax(Math.trunc(actor.lifeCurrent), lifeMax),
+    spellUsesMax,
+    spellUsesCurrent: clampMax(Math.trunc(actor.spellUsesCurrent), spellUsesMax),
+    exertionMax,
+    exertionCurrent: clampMax(Math.trunc(actor.exertionCurrent), exertionMax),
+    disposition: Math.trunc(actor.disposition),
+    weaponName: normaliseText(actor.weaponName),
+    weaponDie: normaliseText(actor.weaponDie),
+    weaponMaterial: Math.trunc(actor.weaponMaterial),
+    armourType: actor.armourType,
+    armourSaveDie: armourSaveForType(actor.armourType),
+    abilities: {
+      smarts: Math.trunc(actor.abilities.smarts),
+      brawn: Math.trunc(actor.abilities.brawn),
+      moxie: Math.trunc(actor.abilities.moxie),
+      hotness: Math.trunc(actor.abilities.hotness),
+    },
+    statuses: Array.from(
+      new Set(
+        actor.statuses
+          .map((status) => normaliseText(status))
+          .filter((status) => status !== ""),
+      ),
+    ),
+    movesText: normaliseText(actor.movesText),
+    inventoryText: normaliseText(actor.inventoryText),
+    notes: normaliseText(actor.notes),
+  };
+}
+
+function createRollEntry(label: string, detail: string): RollLogEntry {
+  return {
+    id: makeId("roll"),
+    label,
+    detail,
+  };
+}
+
+function pushRoll(
+  state: StageChatState,
+  label: string,
+  detail: string,
+): StageChatState {
+  return {
+    ...state,
+    rollLog: [createRollEntry(label, detail), ...state.rollLog].slice(0, MAX_ROLL_LOG),
+  };
+}
+
+function normaliseEncounter(
+  encounter: EncounterState,
+  actors: ActorSheet[],
+): EncounterState {
+  const validActorId =
+    encounter.activeActorId != null &&
+    actors.some((actor) => actor.id === encounter.activeActorId)
+      ? encounter.activeActorId
+      : actors[0]?.id ?? null;
+
+  return {
+    active: encounter.active && actors.length > 0,
+    round: Math.max(1, Math.trunc(encounter.round)),
+    activeActorId: encounter.active ? validActorId : null,
+    surprise: encounter.surprise,
+    notes: normaliseText(encounter.notes),
+  };
+}
+
+function normaliseState(state: StageChatState): StageChatState {
+  const actors = state.actors.map((actor) => normaliseActor(actor));
+  return {
+    version: 1,
+    actors,
+    encounter: normaliseEncounter(state.encounter, actors),
+    rollLog: state.rollLog.slice(0, MAX_ROLL_LOG),
+    campaignNotes: normaliseText(state.campaignNotes),
+  };
+}
+
+export class Stage extends StageBase<
+  null,
+  StageChatState,
+  StageMessageState,
+  StageConfig
+> {
+  private chatStateData: StageChatState;
+  private messageStateData: StageMessageState;
+  private readonly configData: ResolvedStageConfig;
+  private readonly listeners: Set<UpdateListener>;
+  private uiError: string | null;
+
+  constructor(
+    data: InitialData<null, StageChatState, StageMessageState, StageConfig>,
+  ) {
+    super(data);
+    this.chatStateData = normaliseState(data.chatState ?? createDefaultState());
+    this.messageStateData = data.messageState ?? { lastInjectedSummary: null };
+    this.configData = { ...DEFAULT_CONFIG, ...(data.config ?? {}) };
+    this.listeners = new Set();
+    this.uiError = null;
+  }
+
+  async load(): Promise<
+    Partial<LoadResponse<null, StageChatState, StageMessageState>>
+  > {
+    return {
+      success: true,
+      error: null,
+      initState: null,
+      chatState: this.chatStateData,
+      messageState: this.messageStateData,
+    };
+  }
+
+  async setState(state: StageMessageState): Promise<void> {
+    this.messageStateData = state ?? { lastInjectedSummary: null };
+    this.emit();
+  }
+
+  async beforePrompt(
+    userMessage: Message,
+  ): Promise<Partial<StageResponse<StageChatState, StageMessageState>>> {
+    void userMessage;
+    const stageDirections = this.configData.includeStageDirections
+      ? buildStageDirections(this.chatStateData, this.configData)
+      : null;
+    this.messageStateData = { lastInjectedSummary: stageDirections };
+    return {
+      stageDirections,
+      messageState: this.messageStateData,
+      modifiedMessage: null,
+      systemMessage: null,
+      error: null,
+      chatState: null,
+    };
+  }
+
+  async afterResponse(
+    botMessage: Message,
+  ): Promise<Partial<StageResponse<StageChatState, StageMessageState>>> {
+    void botMessage;
+    return {
+      stageDirections: null,
+      messageState: this.messageStateData,
+      modifiedMessage: null,
+      systemMessage: null,
+      error: null,
+      chatState: null,
+    };
+  }
+
+  render(): ReactElement {
+    return <VnvStageView stage={this} />;
+  }
+
+  getChatState(): StageChatState {
+    return this.chatStateData;
+  }
+
+  getConfig(): ResolvedStageConfig {
+    return this.configData;
+  }
+
+  getUiError(): string | null {
+    return this.uiError;
+  }
+
+  clearUiError(): void {
+    this.uiError = null;
+    this.emit();
+  }
+
+  subscribe(listener: UpdateListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  async saveActor(actor: ActorSheet): Promise<void> {
+    const nextActor = normaliseActor(actor);
+    await this.mutateState((state) => {
+      const index = state.actors.findIndex((entry) => entry.id === nextActor.id);
+      const actors =
+        index === -1
+          ? [...state.actors, nextActor]
+          : state.actors.map((entry) => (entry.id === nextActor.id ? nextActor : entry));
+      return normaliseState({
+        ...state,
+        actors,
+      });
+    });
+  }
+
+  async addActor(role: ActorRole): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        actors: [...state.actors, createActor(role)],
+      }),
+    );
+  }
+
+  async duplicateActor(actorId: string): Promise<void> {
+    const actor = this.chatStateData.actors.find((entry) => entry.id === actorId);
+    if (actor == null) {
+      return;
     }
 
-    async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after the constructor, in case there is some asynchronous code you need to
-         run on instantiation.
-         ***/
-        return {
-            /*** @type boolean @default null
-             @description The 'success' boolean returned should be false IFF (if and only if), some condition is met that means
-              the stage shouldn't be run at all and the iFrame can be closed/removed.
-              For example, if a stage displays expressions and no characters have an expression pack,
-              there is no reason to run the stage, so it would return false here. ***/
-            success: true,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
-            initState: null,
-            chatState: null,
-        };
-    }
+    const duplicate = normaliseActor({
+      ...actor,
+      id: makeId(actor.role),
+      name: `${actor.name} Copy`,
+    });
 
-    async setState(state: MessageStateType): Promise<void> {
-        /***
-         This can be called at any time, typically after a jump to a different place in the chat tree
-         or a swipe. Note how neither InitState nor ChatState are given here. They are not for
-         state that is affected by swiping.
-         ***/
-        if (state != null) {
-            this.myInternalState = {...this.myInternalState, ...state};
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        actors: [...state.actors, duplicate],
+      }),
+    );
+  }
+
+  async removeActor(actorId: string): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        actors: state.actors.filter((actor) => actor.id !== actorId),
+      }),
+    );
+  }
+
+  async moveActor(actorId: string, direction: -1 | 1): Promise<void> {
+    await this.mutateState((state) => {
+      const index = state.actors.findIndex((actor) => actor.id === actorId);
+      if (index === -1) {
+        return state;
+      }
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= state.actors.length) {
+        return state;
+      }
+      const actors = [...state.actors];
+      const [actor] = actors.splice(index, 1);
+      actors.splice(targetIndex, 0, actor);
+      return normaliseState({
+        ...state,
+        actors,
+      });
+    });
+  }
+
+  async saveCampaignNotes(notes: string): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      campaignNotes: normaliseText(notes),
+    }));
+  }
+
+  async setEncounterState(partial: Partial<EncounterState>): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        encounter: {
+          ...state.encounter,
+          ...partial,
+        },
+      }),
+    );
+  }
+
+  async startEncounter(): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        encounter: {
+          ...state.encounter,
+          active: state.actors.length > 0,
+          round: 1,
+          activeActorId: state.actors[0]?.id ?? null,
+        },
+      }),
+    );
+  }
+
+  async endEncounter(): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        encounter: {
+          ...state.encounter,
+          active: false,
+          round: 1,
+          activeActorId: null,
+        },
+      }),
+    );
+  }
+
+  async nextTurn(): Promise<void> {
+    await this.mutateState((state) => {
+      if (state.actors.length === 0) {
+        return state;
+      }
+
+      const currentIndex = state.actors.findIndex(
+        (actor) => actor.id === state.encounter.activeActorId,
+      );
+      const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % state.actors.length;
+      const wrapped = currentIndex !== -1 && nextIndex === 0;
+
+      return normaliseState({
+        ...state,
+        encounter: {
+          ...state.encounter,
+          active: true,
+          round: wrapped ? state.encounter.round + 1 : state.encounter.round,
+          activeActorId: state.actors[nextIndex]?.id ?? null,
+        },
+      });
+    });
+  }
+
+  async setActiveActor(actorId: string | null): Promise<void> {
+    await this.mutateState((state) =>
+      normaliseState({
+        ...state,
+        encounter: {
+          ...state.encounter,
+          activeActorId: actorId,
+        },
+      }),
+    );
+  }
+
+  async toggleStatus(actorId: string, status: string): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      actors: state.actors.map((actor) => {
+        if (actor.id !== actorId) {
+          return actor;
         }
-    }
+        const hasStatus = actor.statuses.includes(status);
+        return normaliseActor({
+          ...actor,
+          statuses: hasStatus
+            ? actor.statuses.filter((entry) => entry !== status)
+            : [...actor.statuses, status],
+        });
+      }),
+    }));
+  }
 
-    async beforePrompt(userMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called after someone presses 'send', but before anything is sent to the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description Just the last message about to be sent. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is itself from another bot, ex. in a group chat. ***/
-        } = userMessage;
+  async adjustLife(actorId: string, delta: number): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      actors: state.actors.map((actor) =>
+        actor.id === actorId
+          ? {
+              ...actor,
+              lifeCurrent: clamp(actor.lifeCurrent + delta, 0, actor.lifeMax),
+            }
+          : actor,
+      ),
+    }));
+  }
+
+  async adjustResource(
+    actorId: string,
+    resource: TrackableResource,
+    delta: number,
+  ): Promise<void> {
+    await this.mutateState((state) => ({
+      ...state,
+      actors: state.actors.map((actor) => {
+        if (actor.id !== actorId) {
+          return actor;
+        }
+        if (resource === "spellUses") {
+          return {
+            ...actor,
+            spellUsesCurrent: clamp(
+              actor.spellUsesCurrent + delta,
+              0,
+              actor.spellUsesMax,
+            ),
+          };
+        }
+        if (resource === "exertion") {
+          return {
+            ...actor,
+            exertionCurrent: clamp(
+              actor.exertionCurrent + delta,
+              0,
+              actor.exertionMax,
+            ),
+          };
+        }
         return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            stageDirections: null,
-            /*** @type MessageStateType | null @description the new state after the userMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
-            /*** @type null | string @description If not null, the user's message itself is replaced
-             with this value, both in what's sent to the LLM and in the database. ***/
-            modifiedMessage: null,
-            /*** @type null | string @description A system message to append to the end of this message.
-             This is unique in that it shows up in the chat log and is sent to the LLM in subsequent messages,
-             but it's shown as coming from a system user and not any member of the chat. If you have things like
-             computed stat blocks that you want to show in the log, but don't want the LLM to start trying to
-             mimic/output them, they belong here. ***/
-            systemMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
-            chatState: null,
+          ...actor,
+          disposition: actor.disposition + delta,
         };
-    }
+      }),
+    }));
+  }
 
-    async afterResponse(botMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after a response from the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description The LLM's response. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is from a bot, conceivably always true. ***/
-        } = botMessage;
+  async appendRoll(label: string, detail: string): Promise<void> {
+    await this.mutateState((state) => pushRoll(state, label, detail));
+  }
+
+  async rollLoose(count: number, sides: number, label?: string): Promise<void> {
+    const dice = rollDice(count, sides);
+    const total = dice.reduce((sum, value) => sum + value, 0);
+    const prefix = label ?? `${count}d${sides}`;
+    await this.appendRoll(prefix, `${dice.join(", ")} = ${total}`);
+  }
+
+  async rollActorAbilities(actorId: string): Promise<void> {
+    const abilities = rollAbilityBlock();
+    const detail = `Smarts ${formatSigned(abilities.smarts)}, Brawn ${formatSigned(abilities.brawn)}, Moxie ${formatSigned(abilities.moxie)}, Hotness ${formatSigned(abilities.hotness)}`;
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) =>
+        actor.id === actorId ? { ...actor, abilities } : actor,
+      );
+      return pushRoll({ ...state, actors }, "Ability Roll", detail);
+    });
+  }
+
+  async rollActorWeapon(actorId: string): Promise<void> {
+    const roll = rollWeaponLoadout();
+    const detail = `${roll.materialLabel} ${roll.weaponName} ${roll.weaponDie}, material bonus ${formatSigned(roll.materialBonus)}`;
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) =>
+        actor.id === actorId
+          ? {
+              ...actor,
+              weaponName: roll.weaponName,
+              weaponDie: roll.weaponDie,
+              weaponMaterial: roll.materialBonus,
+            }
+          : actor,
+      );
+      return pushRoll({ ...state, actors }, "Weapon Roll", detail);
+    });
+  }
+
+  async rollActorArmour(actorId: string): Promise<void> {
+    const roll = rollArmourLoadout();
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) =>
+        actor.id === actorId
+          ? {
+              ...actor,
+              armourType: roll.armourType,
+              armourSaveDie: roll.armourSaveDie,
+            }
+          : actor,
+      );
+      return pushRoll(
+        { ...state, actors },
+        "Armour Roll",
+        `${roll.armourType} armour, save ${roll.armourSaveDie}`,
+      );
+    });
+  }
+
+  async rollActorBirthsign(actorId: string): Promise<void> {
+    const roll = rollBirthsign();
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) =>
+        actor.id === actorId
+          ? {
+              ...actor,
+              birthsign: roll.sign,
+              boon: roll.boon,
+            }
+          : actor,
+      );
+      return pushRoll(
+        { ...state, actors },
+        "Birthsign Roll",
+        `${roll.sign} | Boon: ${roll.boon}`,
+      );
+    });
+  }
+
+  async rollActorSupply(actorId: string): Promise<void> {
+    const supply = rollSupplySnippet();
+    await this.mutateState((state) => {
+      const actors = state.actors.map((actor) => {
+        if (actor.id !== actorId) {
+          return actor;
+        }
+        const inventoryText =
+          actor.inventoryText.trim() === ""
+            ? supply
+            : `${actor.inventoryText}\n${supply}`;
         return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            stageDirections: null,
-            /*** @type MessageStateType | null @description the new state after the botMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
-            /*** @type null | string @description If not null, the bot's response itself is replaced
-             with this value, both in what's sent to the LLM subsequently and in the database. ***/
-            modifiedMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
-            systemMessage: null,
-            chatState: null
+          ...actor,
+          inventoryText,
         };
+      });
+      return pushRoll({ ...state, actors }, "Supply Roll", supply);
+    });
+  }
+
+  previewStageDirections(): string {
+    const summary = buildStageDirections(this.chatStateData, this.configData);
+    if (this.configData.includeStageDirections) {
+      return summary;
     }
+    return `Stage directions are disabled by config.\n\n${summary}`;
+  }
 
+  private emit(): void {
+    this.listeners.forEach((listener) => listener());
+  }
 
-    render(): ReactElement {
-        /***
-         There should be no "work" done here. Just returning the React element to display.
-         If you're unfamiliar with React and prefer video, I've heard good things about
-         @link https://scrimba.com/learn/learnreact but haven't personally watched/used it.
+  private async mutateState(
+    mutator: (state: StageChatState) => StageChatState,
+  ): Promise<void> {
+    const nextState = normaliseState(mutator(this.chatStateData));
+    this.chatStateData = nextState;
+    this.emit();
+    await this.persistChatState(nextState);
+  }
 
-         For creating 3D and game components, react-three-fiber
-           @link https://docs.pmnd.rs/react-three-fiber/getting-started/introduction
-           and the associated ecosystem of libraries are quite good and intuitive.
-
-         Cuberun is a good example of a game built with them.
-           @link https://github.com/akarlsten/cuberun (Source)
-           @link https://cuberun.adamkarlsten.com/ (Demo)
-         ***/
-        return <div style={{
-            width: '100vw',
-            height: '100vh',
-            display: 'grid',
-            alignItems: 'stretch'
-        }}>
-            <div>Hello World! I'm an empty stage! With {this.myInternalState['someKey']}!</div>
-            <div>There is/are/were {this.myInternalState['numChars']} character(s)
-                and {this.myInternalState['numUsers']} human(s) here.
-            </div>
-        </div>;
+  private async persistChatState(nextState: StageChatState): Promise<void> {
+    try {
+      await this.messenger.updateChatState(nextState);
+      if (this.uiError != null) {
+        this.uiError = null;
+        this.emit();
+      }
+    } catch (error) {
+      this.uiError =
+        error instanceof Error ? error.message : "Failed to persist chat state.";
+      this.emit();
     }
-
+  }
 }
